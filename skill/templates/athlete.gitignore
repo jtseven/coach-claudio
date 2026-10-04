@@ -1,0 +1,9 @@
+# athlete/ can be its own private git repo for backup (scripts/backup.sh).
+# Raw health exports are bulk personal data and rebuild their baselines on
+# their own - keep them on the machine only.
+state/health/
+state/weekly_chart.png
+state/postrun.lock
+state/postrun_failures
+state/typing-*.pid
+*.tmp

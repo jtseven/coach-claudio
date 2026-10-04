@@ -1,0 +1,55 @@
+# Test athlete - used by tests/run.sh. __PLAN_START__ is replaced at runtime.
+
+[athlete]
+name = "Alex"
+pronouns = "she/her"
+language = "Spanish"
+timezone = "Europe/Madrid"
+
+[home]
+place = "Valencia"
+lat = 39.47
+lon = -0.38
+
+[goal]
+race = "Valencia Half Marathon"
+date = "2099-12-06"
+distance_km = 21.0975
+target_time = "1:45:00"
+plan_start = "__PLAN_START__"
+plan_weeks = 20
+down_week_every = 4
+
+[physiology]
+hrmax = 196
+threshold_hr = 172
+easy_ceiling = 152
+vdot = 40
+zones = [
+  ["Z1 recovery", 0, 130],
+  ["Z2 easy", 131, 152],
+  ["Z3 steady", 153, 166],
+  ["Z4 threshold", 167, 179],
+  ["Z5 VO2max", 180, 0],
+]
+wpb_band = []
+
+[schedule]
+morning = "06:45"
+evening = "21:30"
+plan_day = "Thursday"
+closeout_day = "Sunday"
+
+[calendar]
+training = "Valencia Half training"
+personal = ["alex@example.com"]
+
+[integrations]
+strava = true
+google_calendar = true
+hevy = false
+apple_health = false
+telegram = true
+
+[activities]
+commute_types = ["EBikeRide", "EMountainBikeRide"]

@@ -1,0 +1,8 @@
+[
+  {"id": 1, "sport_type": "Run", "start_local": "2026-09-07T18:02:00", "distance": 6000, "moving_time": 2100, "relative_effort": 30},
+  {"id": 2, "sport_type": "Run", "start_local": "2026-09-09T18:05:00", "distance": 5000, "moving_time": 1800, "relative_effort": 28},
+  {"id": 3, "sport_type": "EBikeRide", "start_local": "2026-09-10T08:00:00", "distance": 9000, "moving_time": 1800, "relative_effort": 2},
+  {"id": 4, "sport_type": "WeightTraining", "start_local": "2026-09-10T19:00:00", "distance": 0, "moving_time": 2700, "relative_effort": 15},
+  {"id": 5, "sport_type": "Run", "start_local": "2026-09-13T09:00:00", "distance": 10000, "moving_time": 3900, "relative_effort": 60},
+  {"id": 6, "sport_type": "Ride", "start_local": "2026-09-12T10:00:00", "distance": 40000, "moving_time": 5400, "relative_effort": 70}
+]

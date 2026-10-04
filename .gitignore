@@ -1,0 +1,17 @@
+# Everything about the athlete - config, profile, plan, the coach's memory,
+# health data. Back it up as its own private repo (docs/deployment.md).
+athlete/
+
+# Secrets - never commit. If one ever lands in history, rotate it.
+.env
+
+# Generated, bulky or rotating
+logs/
+outbox/
+venv/
+vendor/
+__pycache__/
+*.pyc
+*.tmp
+.DS_Store
+._*

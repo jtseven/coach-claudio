@@ -1,0 +1,85 @@
+# Running coach - athlete config.
+#
+# The structured half of what the coach knows about you. The setup fills
+# this in with you; edit it freely afterwards. The prose half (history,
+# quirks, what your data looks like) is athlete/profile.md, and the season's
+# phases are athlete/plan.md.
+#
+# Check it with:  python3 skill/scripts/coach.py check && python3 skill/scripts/coach.py show
+
+[athlete]
+name = ""                    # what the coach calls you
+pronouns = "they/them"
+language = "English"         # every message is written in this language
+timezone = ""                # IANA name, e.g. "Europe/Berlin" - must match the machine's clock
+
+[home]
+# Default location for weather. --place covers travel.
+place = ""
+lat = 0.0
+lon = 0.0
+
+[goal]
+race = ""                    # e.g. "Berlin Marathon 2027"
+date = ""                    # race day, YYYY-MM-DD
+distance_km = 42.195
+target_time = ""             # e.g. "3:59:59", or "" for "finish healthy"
+plan_start = ""              # Monday of week 1, YYYY-MM-DD
+plan_weeks = 0               # weeks from plan_start to race week inclusive
+down_week_every = 4          # every Nth week is a down week (0 = none)
+
+[physiology]
+hrmax = 0                    # measured if possible (race finish), not 220-age
+threshold_hr = 0             # ~avg HR of a maximal 45-60 min effort
+easy_ceiling = 0             # the top of easy running, bpm
+vdot = 0                     # from a recent race (analyze.py vdot)
+# Your zones exactly as configured on your watch/Strava. Leave empty to
+# derive them from HRmax. Format: ["label", low, high] with 0 = open-ended.
+zones = [
+  # ["Z1 recovery", 0, 131],
+  # ["Z2 easy", 132, 153],
+  # ["Z3 steady", 154, 169],
+  # ["Z4 threshold", 170, 183],
+  # ["Z5 VO2max", 184, 0],
+]
+# Easy-run watts per heartbeat (needs running power). Fill in once you have
+# 5+ easy runs at similar power, e.g. [1.36, 1.49]. Empty = not used.
+wpb_band = []
+
+[schedule]
+morning = "07:30"            # morning brief
+evening = "21:00"            # evening review
+plan_day = "Friday"          # the evening run plans next week on this day
+closeout_day = "Sunday"      # ...and closes out the finished week on this day
+weekday_run_time = "18:00"   # default slot for weekday sessions
+long_run_time = "09:00"
+postrun_hours = "6-21"       # hours the post-run watcher polls Strava (cron syntax)
+
+[calendar]
+# Google Calendar names, exactly as shown in Google Calendar.
+training = ""                # the coach owns this one: sessions, weekly targets, phases
+training_id = ""             # filled in by the setup
+personal = []                # read before scheduling: travel, events, commitments
+never_write = []             # calendars the coach may read but must not touch
+
+[integrations]
+strava = true                # required - the ground truth for what you did
+google_calendar = true       # the plan lives here
+hevy = false                 # gym routines in the Hevy app (needs Hevy Pro API key)
+apple_health = false         # sleep, HRV, resting HR via Health Auto Export (iPhone)
+telegram = false             # chat + scheduled check-ins on your phone
+voice = false                # transcribe Telegram voice notes locally (whisper.cpp)
+weekly_chart = false         # PNG trend chart with the weekly close-out (matplotlib)
+
+[activities]
+# Strava sport types that are commuting, not training: never counted,
+# never reacted to.
+commute_types = ["EBikeRide", "EMountainBikeRide"]
+
+[messages]
+# Length budgets in words. Telegram is read one-handed on a phone.
+morning_words = "40-80"
+evening_words = "60-120"
+postrun_words = "60-120"
+planning_words = "up to ~180"
+review_words = "up to ~250"
