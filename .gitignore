@@ -1,6 +1,9 @@
 # Everything about the athlete - config, profile, plan, the coach's memory,
-# health data. Back it up as its own private repo (docs/deployment.md).
+# health data. Back it up as its own private repo, or keep the whole coach
+# home as one private repo by uncommenting the next line in YOUR PRIVATE COPY
+# ONLY (docs/deployment.md "Backup"). Never in a public fork.
 athlete/
+# !/athlete/
 
 # Secrets - never commit. If one ever lands in history, rotate it.
 .env

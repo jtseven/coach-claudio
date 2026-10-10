@@ -436,9 +436,12 @@ skill/scripts/check_in.sh morning --no-send
 
 ## Backup
 
-The engine is a public checkout you can always clone again. `athlete/` is the
-irreplaceable part: config, profile, plan and the logs. Make it its own
-private repo and push it nightly:
+The engine is public code you can always clone again. `athlete/` is the
+irreplaceable part: config, profile, plan and the logs. `backup.sh` commits
+and pushes it nightly; it works with either of two layouts.
+
+**A. `athlete/` as its own private repo** (simplest). The coach home stays a
+plain checkout of the public engine:
 
 ```bash
 cd athlete
@@ -447,20 +450,35 @@ git remote add origin git@github.com:<you>/<private-repo>.git
 git add -A && git commit -m "initial" && git push -u origin main
 ```
 
-Then re-render the crontab — the backup line is active once `athlete/.git`
-exists. `athlete/.gitignore` keeps raw health data out, and secrets live in
-the coach home's `.env`, outside `athlete/`, so they can't be committed from
-there. If a secret ever lands in a commit, rotate it (Telegram: @BotFather;
+**B. The whole coach home as one private repo** — engine and athlete data
+together, with the public engine as `upstream`. Handy if you also keep your
+own notes or tools next to the coach, or tweak the engine yourself:
+
+```bash
+git clone <public engine> ~/claude-running-coach && cd ~/claude-running-coach
+git remote rename origin upstream
+git remote add origin git@github.com:<you>/<private-repo>.git
+# in .gitignore, uncomment:  !/athlete/
+git add -A && git commit -m "track athlete data" && git push -u origin main
+```
+
+Engine updates then arrive with `git pull upstream main` (merge, don't
+rebase). Keep that private repo private — it holds everything below.
+
+Either way, re-render the crontab afterwards: the backup line is active once
+`backup.sh` has a repo to commit to. `athlete/.gitignore` keeps raw health
+data out, and secrets live in the coach home's `.env`, which is ignored in
+both layouts. If a secret ever lands in a commit, rotate it (Telegram: @BotFather;
 health key: a new `openssl rand -hex 16` and update the phone) — history
 rewriting on a backup repo is not worth trusting.
 
-Restore: clone the engine, clone your athlete repo into `athlete/`, recreate
-`.env`, `coach.py crontab`.
+Restore: (A) clone the engine, clone your athlete repo into `athlete/`; (B)
+clone your private repo. Then recreate `.env` and `coach.py crontab`.
 
 ## Updating
 
 ```bash
-git pull
+git pull                    # layout B: git pull upstream main
 python3 skill/scripts/doctor.py
 ```
 

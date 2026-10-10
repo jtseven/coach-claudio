@@ -318,7 +318,7 @@ def cmd_crontab(args):
             f"*/5 * * * * {scripts}/ensure_health_server.sh >> {logs}/health.log 2>&1",
             "",
         ]
-    backup = "" if (cc.ATHLETE / ".git").exists() else "# "
+    backup = "" if cc.backup_repo() else "# "
     out += [
         "# Nightly backup of athlete/ to its own private git remote "
         "(see docs/deployment.md).",

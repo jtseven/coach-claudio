@@ -217,8 +217,11 @@ is on the calendar, it must have a matching concrete routine in Hevy** — real
 exercises with sets and reps. Use the standing routines named in
 `athlete/plan.md` and update those rather than creating copies. Search
 exercise templates before using any exercise, and check `search-routines`
-before any create — creates are additive with no dedupe. Mechanics and
-progression rules are in `references/training-plan.md`.
+before any create — creates are additive with no dedupe. **A weight change
+goes into the sets, not just the note** — at the rack they follow the sets;
+after every `update-routine`, re-read it and check that every number in a
+note matches its sets. Mechanics and progression rules are in
+`references/training-plan.md`.
 
 **Apple Health** (read-only, local files), when on — the watch exports to
 this machine through Health Auto Export. Always read through `health.py`;

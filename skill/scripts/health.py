@@ -12,7 +12,8 @@ Standard library only. Every subcommand takes --json.
 ONE THING TO UNDERSTAND BEFORE TRUSTING ANY NUMBER HERE: Health Auto Export
 can aggregate by **hour** (the recommended setup), so a metric normally holds
 many datapoints per calendar day - or by day, one datapoint each, and an
-archive can hold both shapes at once. Never sum or average a metric by hand - go through `value()`, which knows whether the
+archive can hold both shapes at once. Never sum or average a metric by
+hand - go through `value()`, which knows whether the
 metric accumulates over the day (steps, energy, distance: SUM_METRICS) or is
 a rate to be averaged. Averaging what should be summed understated one day's
 active energy as 80 kJ instead of 1754.

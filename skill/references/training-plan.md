@@ -116,6 +116,16 @@ Update the routine via `update-routine` so the numbers in the app at the rack
 are the current prescription, then tell them what moved ("leg press 77 →
 80") — visible progression is half the reason to lift.
 
+**Sets and notes must agree.** At the rack the athlete follows the weight in
+the sets, not the note — a routine whose note says "curl 27.5" while the sets
+still say 25 gets noticed mid-session, and costs trust. So every change to a
+weight, rep or set count goes into the **sets themselves** (`weight_kg`,
+`reps`, number of set entries); the note only explains why. Never write a new
+number into a note without changing the sets in the same `update-routine`.
+Afterwards, `get-routine` and check each exercise: every kg/reps figure in a
+note matches the sets. Same for the calendar event description — it repeats
+the sets, not a different plan.
+
 **What Hevy is not used for here**: don't create *workouts* (Hevy's record of
 a completed session) when planning — `create-workout` is for logging what
 actually happened, and inventing completion data for a session that hasn't

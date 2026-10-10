@@ -172,6 +172,24 @@ def easy_ceiling(fallback=None):
     return float(v) if v else fallback
 
 
+def backup_repo():
+    """Where backup.sh commits: athlete/ if it is its own repo, else the coach
+    home if that is a repo tracking athlete/, else None."""
+    import subprocess
+
+    if (ATHLETE / ".git").exists():
+        return ATHLETE
+    try:
+        inside = subprocess.run(["git", "-C", str(HOME), "rev-parse", "--git-dir"],
+                                capture_output=True).returncode == 0
+        ignored = subprocess.run(["git", "-C", str(HOME), "check-ignore", "-q",
+                                  "athlete/config.toml"],
+                                 capture_output=True).returncode == 0
+    except FileNotFoundError:
+        return None
+    return HOME if inside and not ignored else None
+
+
 def write_allowed(what):
     """False (and a note on stdout) in dry-run mode."""
     if DRY_RUN:

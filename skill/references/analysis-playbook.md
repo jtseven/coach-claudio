@@ -82,7 +82,10 @@ this:
 
 So roughly 1.36–1.49 was that runner's normal easy-run band. Write the
 athlete's observed range into `physiology.wpb_band` in the config and the
-profile; `decouple` compares against it. A reading materially below the band —
+profile; `decouple` compares against it. The band is their *usual* range, not
+their best: hilly loops can sit well above it. Before calling any reading
+"the best this year", check the actual activities — a claim built from the
+band alone is how a coach ends up correcting itself the next morning. A reading materially below the band —
 more heartbeats bought per watt of work — means the same work is costing them
 more, which is what fatigue, heat, alcohol, illness or dehydration all look
 like.
