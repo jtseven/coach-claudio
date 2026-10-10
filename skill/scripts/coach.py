@@ -320,8 +320,8 @@ def cmd_crontab(args):
         ]
     backup = "" if cc.backup_repo() else "# "
     out += [
-        "# Nightly backup of athlete/ to its own private git remote "
-        "(see docs/deployment.md).",
+        "# Nightly backup of athlete/ to a private git remote "
+        "(docs/deployment.md \"Backup\").",
         f"{backup}30 3 * * *  {scripts}/backup.sh >> {logs}/backup.log 2>&1",
         "",
         "# Keep logs from growing without bound.",

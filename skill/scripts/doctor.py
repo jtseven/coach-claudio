@@ -193,7 +193,8 @@ def check_integrations():
             cron = subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout
         except FileNotFoundError:
             cron = ""
-        if str(cc.SCRIPTS / "check_in.sh") in cron:
+        active = "\n".join(l for l in cron.splitlines() if not l.lstrip().startswith("#"))
+        if str(cc.SCRIPTS / "check_in.sh") in active:
             report(OK, "check-ins are in the crontab")
         else:
             report(FAIL, "check-ins are not in the crontab",
