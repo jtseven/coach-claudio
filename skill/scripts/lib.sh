@@ -4,7 +4,7 @@
 #
 # Gives you: SCRIPT_DIR, COACH_HOME, ATHLETE_DIR, STATE_DIR, LOG_DIR,
 # OUTBOX_DIR, CLAUDE_BIN, the secrets from .env and the Telegram plugin's
-# .env, and the helpers now, run_timeout, coach_get, diagnose, alert.
+# .env, and the helpers now, run_timeout, coach_get, charts, diagnose, alert.
 #
 # Written for bash on Linux and macOS alike: no `date -Is`, no `flock`, no
 # bare `timeout`, no `nproc` - each of those is GNU-only.
@@ -60,6 +60,20 @@ run_timeout() {
 # coach_get KEY - one value from athlete/config.toml (empty if unset).
 coach_get() {
   python3 "$SCRIPT_DIR/coach.py" get "$1" 2>/dev/null
+}
+
+# charts ARGS... - charts.py with matplotlib. uv builds and caches the
+# environment from the script's own dependency block; a hand-made venv at
+# $COACH_HOME/venv still works for setups from before uv.
+charts() {
+  if command -v uv >/dev/null 2>&1; then
+    uv run --quiet --script "$SCRIPT_DIR/charts.py" "$@"
+  elif [[ -x "$COACH_HOME/venv/bin/python3" ]]; then
+    "$COACH_HOME/venv/bin/python3" "$SCRIPT_DIR/charts.py" "$@"
+  else
+    echo "charts need uv (or a venv with matplotlib at $COACH_HOME/venv)" >&2
+    return 127
+  fi
 }
 
 # A failed claude run should become something the athlete can act on from

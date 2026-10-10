@@ -185,6 +185,20 @@ The entry also splits non-running time — `other_aerobic_h` (rides, hikes,
 swims, skiing), `strength_h` / `strength_sessions` (gym), `climb_h` and
 `misc_h` — which feeds the block review and the chart. Nothing to supply.
 
+Two more stores, fed from the same week of activities:
+
+```bash
+python3 <skill>/scripts/analyze.py load --activities - --save   # fitness, fatigue, form
+python3 <skill>/scripts/analyze.py runlog --missing -           # runs the run log lacks
+```
+
+`load --save` adds the week's relative efforts to the training-load history
+(re-saving a week is harmless). For each run `runlog --missing` lists — the
+post-run reaction normally logged it already — pull its streams and run
+`analyze.py streams --append` (playbook section 3). The easy-run
+`--easy-above` figures above come out of the same output, so it's one stream
+call per run, not two — do this before `weeklog`.
+
 Then **reconcile next week**, which is already on the calendar:
 
 - Long run happened as planned → leave next week alone.
@@ -213,7 +227,14 @@ python3 <skill>/scripts/health.py block       # with Apple Health: RHR, HRV, wei
 ```
 
 Plus, with Hevy: `get-exercise-history` for the main lift of each routine.
-First and last working weight in the block is enough.
+First and last working weight in the block is enough. And the aerobic
+evidence:
+
+```bash
+python3 <skill>/scripts/analyze.py efficiency --weeks 8   # easy-run EF, long-run decoupling
+python3 <skill>/scripts/analyze.py zonedist --weeks 4     # low / mid / high
+python3 <skill>/scripts/analyze.py load                   # where form sits after the down week
+```
 
 Then write it in this order, short lines, no headers:
 
@@ -224,7 +245,10 @@ Then write it in this order, short lines, no headers:
 3. **The rest of the athlete** — gym sessions done and what moved ("leg
    press 77 → 96"), other sports by hours. Climbing, rides and hikes get
    noticed here.
-4. **Body** — only the markers that genuinely moved. Medians with few
+4. **Body** — only the markers that genuinely moved. Easy-run efficiency
+   belongs here when it moved more than ~2% on similar terrain: "same
+   heart rate, 10 s/km faster than a block ago" is the aerobic work
+   landing, and few things land better. Medians with few
    readings are flagged by the script — don't lean on those.
 5. **One focus for the next block**, concrete: "a long run every week, even a
    short one" beats "stay consistent". Pick the thing the numbers point at.

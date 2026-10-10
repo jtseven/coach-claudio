@@ -234,10 +234,26 @@ def check_integrations():
                    "run 'Export now' in Health Auto Export on the iPhone")
 
     if cc.enabled("weekly_chart"):
-        ok = cc.VENV_PY.exists() and subprocess.run(
-            [str(cc.VENV_PY), "-c", "import matplotlib"], capture_output=True).returncode == 0
-        report(OK if ok else FAIL, "matplotlib venv" + ("" if ok else " missing"),
-               "" if ok else f"python3 -m venv {cc.HOME}/venv && {cc.HOME}/venv/bin/pip install matplotlib")
+        # charts.py declares matplotlib inline; uv resolves and caches it. The
+        # first run downloads it, so this check also warms the cache.
+        charts = str(cc.SCRIPTS / "charts.py")
+        uv = shutil.which("uv") or str(Path.home() / ".local/bin/uv")
+        if Path(uv).exists():
+            cmd, how = [uv, "run", "--quiet", "--script", charts, "check"], "uv"
+        elif cc.VENV_PY.exists():
+            cmd, how = [str(cc.VENV_PY), charts, "check"], "venv"
+        else:
+            cmd = None
+        if cmd is None:
+            report(FAIL, "charts: uv not installed",
+                   "curl -LsSf https://astral.sh/uv/install.sh | sh")
+        else:
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode == 0:
+                report(OK, f"charts: {r.stdout.strip()} via {how}")
+            else:
+                report(FAIL, f"charts: matplotlib does not load via {how}",
+                       (r.stderr.strip().splitlines() or ["no output"])[-1])
 
     if cc.enabled("voice"):
         for tool in ("ffmpeg",):

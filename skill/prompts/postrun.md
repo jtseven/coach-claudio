@@ -14,6 +14,14 @@ intended, then the one genuinely interesting thing in the data. For a run
 read references/analysis-playbook.md first; for anything else see
 references/cross-training.md.
 
+If it was a run, record it in the run log once - it feeds the efficiency
+and zone trends the weekly close-out reads. Pull its streams (time,
+heart_rate, velocity_smooth, moving, distance, altitude, plus watts if it has
+power) at resolution 300, save the JSON to a temp file, and run:
+  python3 {scripts}/analyze.py streams --streams <file> --append --id {activity_id} --date <start_local>
+It prints decoupling and time in zones too; mention them only if they are
+the interesting thing about this run.
+
 {{#if apple_health}}
 If it was a run, also check the watch's biomechanics:
   python3 {scripts}/health.py run

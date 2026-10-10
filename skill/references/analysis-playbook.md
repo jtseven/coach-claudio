@@ -21,6 +21,9 @@ so the commands below mostly need no flags for them.
 7. Weekly rollups
 8. Recovery data — what their body did overnight
 9. Running form — cadence, ground contact, vertical oscillation
+10. Training load — fitness, fatigue, form
+11. The aerobic trend — efficiency and intensity distribution
+12. Charts
 
 ---
 
@@ -45,6 +48,10 @@ third of the run was above it.
 ```
 python3 <skill>/scripts/analyze.py ceiling --hr <stream> --time <stream>
 ```
+
+`analyze.py streams` (section 3) prints the same figure along with
+everything else a run's streams can say, so when you're pulling streams
+anyway, use that.
 
 Then ask *where* the excursions were. Almost always they cluster on climbs. That
 distinction matters, because the coaching response differs:
@@ -104,6 +111,43 @@ intensities. Heart rate has a resting offset, so a very slow run naturally shows
 a lower ratio than a fast one. Only compare runs at *similar power*. Comparing an
 easy jog against a tempo run using this metric is meaningless.
 
+### Decoupling within one run
+
+The comparison above is between runs. Within a single run, the question is
+whether the cost of the work stayed constant: **aerobic decoupling**
+compares output per heartbeat in the first half of the steady part with the
+second half.
+
+Pull `get_activity_streams` with `time`, `heart_rate`, `velocity_smooth`,
+`moving`, `distance`, `altitude` (and `watts` when the run has power) at
+`resolution` 300 — a sample every 10–30 s is plenty, and full resolution is
+thousands of points you'd have to write out. Save the JSON to a file:
+
+```
+python3 <skill>/scripts/analyze.py streams --streams <file>
+python3 <skill>/scripts/analyze.py streams --streams <file> --append --id <id> --date <start_local>
+```
+
+It leaves the first 10 minutes out as warm-up (`--skip-warmup`), uses power
+when there is any (hills don't fool it) and pace otherwise, and also prints
+efficiency, time above the ceiling and time per zone. `--append` records the
+run in the run log for the trends in section 11; a run already there is
+skipped.
+
+- **Under 5%** — coupled: aerobically solid at this effort for this long.
+  On a long run that is the result to name.
+- **5–10%** — the effort is at the edge of their aerobic base for that
+  duration — or heat, dehydration, no fuel. Check section 6 first.
+- **Over 10%** — the effort outran the base. On a long run the fix is a
+  slower start, fuel, or a shorter run, not more willpower.
+- **Negative** — HR fell against output: an easier or downhill second half,
+  or a sensor artifact.
+
+Only meaningful for steady runs of 40+ minutes; intervals and fartlek
+decouple by design. With pace as the basis, the script warns when the halves
+differ in climbing — believe the warning. A heat-driven 8% says nothing
+about fitness, so `weather.py history` before you interpret it.
+
 ## 4. Matched-segment comparison
 
 The most rigorous tool available, and the one that beats every confounder except
@@ -151,6 +195,25 @@ python3 <skill>/scripts/analyze.py vdot --distance 9762 --time 2867
 python3 <skill>/scripts/analyze.py paces            # VDOT from the config
 python3 <skill>/scripts/analyze.py riegel --distance 5484 --time 1518 --target 42195
 ```
+
+**Critical speed** is the third view, from their best efforts rather than a
+single race: distance against time is close to a straight line between
+about 2 and 25 minutes of maximal running, and its slope is the fastest pace
+they can hold for a long while (near threshold, ~30–40 min race pace). The
+intercept, D', is the distance they can run above it before they're done.
+
+```
+python3 <skill>/scripts/analyze.py cs --effort 1000:228 --effort 3000:760 --effort 5000:1330
+python3 <skill>/scripts/analyze.py cs --performance <get_activity_performance json, or a list>
+```
+
+It wants maximal efforts at 3+ distances spanning at least 2.5x in duration
+— a parkrun, a hard 3 km, a 1 km rep set all-out. **Splits inside one race
+are not maximal efforts** (the fastest kilometre of a 5k was paced), and the
+script warns when every effort comes from one activity. A low R² or a D'
+outside ~100–400 m means one of the efforts wasn't all-out. Use CS to check
+threshold pace against VDOT, and for "how hard can I go in this 4 km
+tempo?": anything faster than CS burns D' and cannot be held.
 
 **Recalibrate when:** they race, they hit a notable parkrun, or roughly every
 8–12 weeks — the profile says when the current numbers date from and when the
@@ -315,3 +378,89 @@ Form metrics move slowly and are noisy day to day. The honest use is a trend
 across weeks, or as supporting evidence for something else — "the knee complaint
 lines up with cadence dropping to 158 on the longer runs" is real coaching; "your
 vertical oscillation was 0.2 cm higher today" is noise dressed as insight.
+
+## 10. Training load — fitness, fatigue, form
+
+```bash
+python3 <skill>/scripts/analyze.py load                                  # from the saved history
+python3 <skill>/scripts/analyze.py load --activities <json> --save       # add activities first
+```
+
+Each day's load is Strava's `relative_effort` (HR-based, in
+`list_activities`, every sport but commutes). **Fitness** is its 42-day
+average, **fatigue** its 7-day average, **form** the gap — expressed as a
+percentage of fitness so the bands work on Strava's scale:
+
+- **below −30%** — high risk: fatigue well beyond what fitness absorbs.
+  Combined with a niggle or poor sleep, that's the week to cut.
+- **−30 to −10%** — productive: a training block carrying load. Normal.
+- **−10 to +5%** — neutral.
+- **+5 to +25%** — fresh: a down week, or race-ready after a taper.
+- **above +25%** — fitness starting to decay; fine after illness or a
+  holiday, a problem if it lasts.
+
+Use it as evidence, not a verdict:
+
+- **"Should I train today?" / "legs dead"** — form below −30% backs up
+  backing off; form near neutral with dead legs points at sleep, food or
+  illness rather than load.
+- **Taper and race week** — form should climb into the fresh band by race
+  day. If it's still negative a week out, the taper started too late.
+- **Ramp** — fitness gained per week. A ramp far above the weeks before is
+  the load-side version of the +10% rule, and it counts the bike and the
+  gym that running km don't.
+
+It reads only what was saved: if the latest activity in the history is
+older than the athlete's last session, add the recent activities first.
+With under 42 days of history, form isn't judged — the script says so.
+Relative effort needs HR; activities without it count as zero.
+
+## 11. The aerobic trend — efficiency and intensity distribution
+
+The run log (section 3, `--append`) holds every analysed run. Two readings
+come out of it:
+
+```bash
+python3 <skill>/scripts/analyze.py efficiency     # easy-run efficiency by week, long-run decoupling
+python3 <skill>/scripts/analyze.py zonedist       # weekly time low / mid / high
+```
+
+**Efficiency** (EF) is speed per heartbeat — metres per minute per beat — on
+easy runs only (20+ min, held under the ceiling). Its weekly median rising is
+the clearest sign in their own runs that the base is building, and it
+translates into the sentence athletes understand: "≈ pace at the ceiling",
+the pace their easy heart rate buys. Rules:
+
+- Changes under ~2% are noise.
+- **Terrain moves it.** The m/km column is there for a reason: a week of flat
+  routes raises EF without any fitness. Compare like with like.
+- **Heat lowers it** by several percent in summer. A dip in a heatwave isn't
+  lost fitness.
+- With power, watts per beat is the better number (section 3's band).
+
+**Intensity distribution** splits running time into low (at or under the
+easy ceiling), high (at or over threshold HR) and the middle. Most of an
+amateur's time belongs in low — roughly three quarters or more. A large
+middle is the classic pattern: easy runs drifting up, hard runs not hard,
+everything moderately tiring. That's the time to say so, with the number;
+when the distribution is fine, it doesn't need a mention. Recoveries inside
+intervals count as low, so a session-heavy week reads a little easier than
+it was.
+
+## 12. Charts
+
+`charts.py` renders PNGs from the same data. It needs matplotlib, which uv
+provides; run it through `uv run --script`:
+
+```bash
+uv run --script <skill>/scripts/charts.py run --streams <file> --title "Sunday long run"
+uv run --script <skill>/scripts/charts.py load
+uv run --script <skill>/scripts/charts.py aerobic
+uv run --script <skill>/scripts/charts.py weekly
+```
+
+Each prints the PNG path. In a Telegram conversation, attach it with the
+reply tool's `files`; in the terminal, give the path. Send one when a picture
+answers the question better than a number — "show me my long run", "am I
+getting fitter?" — not by default. The weekly close-out sends the weekly,
+load and aerobic charts on its own (with `weekly_chart` on).

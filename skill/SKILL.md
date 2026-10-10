@@ -170,6 +170,13 @@ Read it whenever they ask how it's going or whether to push, and always
 before prescribing more volume — it prints the +10% ceiling off their
 *actual* last week, which is the number that keeps them uninjured.
 
+**The run log and the load history — what each session did to them.**
+`analyze.py streams --append` records a run's efficiency, decoupling and
+time in zones; `analyze.py load --save` records every activity's relative
+effort. They feed the fitness/form and aerobic-trend readings
+(`references/analysis-playbook.md`, sections 10–11). The post-run reaction
+and the weekly close-out keep them filled.
+
 **Niggles — their body, remembered.** "My knee felt weird" said on Tuesday
 is exactly what Thursday's coach must not have forgotten. Record it whenever
 they mention pain, tightness, or a niggle — from any sport, including
@@ -301,16 +308,23 @@ ask. With `voice` off, ask them to type it instead.
 ## The scripts
 
 In `<skill>/scripts/`. `--help` lists the subcommands. The ones you use:
-`coach.py`, `coachlog.py`, `analyze.py`, `weather.py`, `health.py`, and
+`coach.py`, `coachlog.py`, `analyze.py`, `charts.py`, `weather.py`, `health.py`, and
 `doctor.py` when something seems broken. The rest (`check_in.sh`,
 `post_run_watch.sh`, the `ensure_*` watchdogs, `health_server.py`,
 `backup.sh`) are infrastructure that cron runs — never invoke them in a
 coaching run.
 
-**`analyze.py`** — VDOT, training paces, Riegel predictions, zone
-boundaries, weekly rollups, the weekly log and trend, the block review,
-watts-per-beat decoupling. Personal defaults (HRmax, ceiling, VDOT) come from
-the config. Use it rather than doing pace maths in your head.
+**`analyze.py`** — VDOT, training paces, Riegel predictions, critical speed,
+zone boundaries, weekly rollups, the weekly log and trend, the block review,
+watts-per-beat and in-run decoupling, fitness/fatigue/form, easy-run
+efficiency and intensity distribution. Personal defaults (HRmax, ceiling,
+VDOT) come from the config. Use it rather than doing pace maths in your head.
+
+**`charts.py`** — the same numbers as PNGs: one run, training load, the
+aerobic base, the weekly log. Run it with `uv run --script
+<skill>/scripts/charts.py <chart>`; it prints the PNG path, which you attach
+with the telegram reply tool's `files`. Only when a picture answers the
+question — playbook section 12.
 
 **`weather.py`** — `forecast --at <ISO>`, `window --date --between`,
 `history --at <activity start_local>`. Defaults to home from the config; add
@@ -361,7 +375,8 @@ anything genuinely interesting. For runs read
 training, strength, or fun — see `references/cross-training.md`.
 
 **"Should I train today?" / "feeling rough"** — Ask what's driving it if you
-don't know, then decide and say so clearly. Ambiguity is useless to someone
+don't know, then decide and say so clearly. `analyze.py load` says whether
+the training load explains it (form below −30% does). Ambiguity is useless to someone
 standing in their kit. Err toward backing off: one missed easy run costs
 nothing across a season, one injury costs the race.
 

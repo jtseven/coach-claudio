@@ -54,8 +54,8 @@ usual close-out: follow "The block review" in references/training-plan.md
 
 {{#if weekly_chart}}
 {{#if closeout_day}}
-A weekly chart image is sent automatically after your message - don't
-describe it.
+The weekly charts (the week-by-week log, training load, and the aerobic
+base) are sent automatically after your message - don't describe them.
 {{/if}}
 {{/if}}
 

@@ -203,21 +203,34 @@ if [[ "$SEND_OK" -ne 1 ]]; then
   exit 1
 fi
 
-# The weekly close-out gets the trend as a picture, rendered from
-# weekly_log.jsonl. Needs matplotlib in the venv. Strictly best-effort: a
-# missing venv or a render error must never fail a check-in that already sent.
+# The weekly close-out gets the trends as pictures: the weekly log, training
+# load, and the aerobic base (zones + easy-run efficiency) - whichever have
+# data - sent as one album so it is one notification. Strictly best-effort: no
+# uv, a missing log or a render error must never fail a check-in that already
+# sent.
 lower() { tr '[:upper:]' '[:lower:]'; }
 if [[ "$MODE" == "evening" && "$(coach_get integrations.weekly_chart)" == "true" \
-      && "$(LC_ALL=C date +%A | lower)" == "$(coach_get schedule.closeout_day | lower)" \
-      && -x "$COACH_HOME/venv/bin/python3" ]]; then
-  CHART_PNG=$("$COACH_HOME/venv/bin/python3" "$SCRIPT_DIR/analyze.py" chart 2>>"$LOG_DIR/evening.log")
-  if [[ -f "$CHART_PNG" ]]; then
+      && "$(LC_ALL=C date +%A | lower)" == "$(coach_get schedule.closeout_day | lower)" ]]; then
+  PNGS=()
+  for chart in weekly load aerobic; do
+    png=$(charts "$chart" 2>>"$LOG_DIR/evening.log") && [[ -f "$png" ]] && PNGS+=("$png")
+  done
+  if [[ ${#PNGS[@]} -eq 1 ]]; then
     curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
-      -F "chat_id=${TELEGRAM_CHAT_ID}" \
-      -F "photo=@${CHART_PNG}" > /dev/null \
+      -F "chat_id=${TELEGRAM_CHAT_ID}" -F "photo=@${PNGS[0]}" > /dev/null \
       || echo "$(now) weekly chart failed to send (message itself went out fine)" >&2
+  elif [[ ${#PNGS[@]} -gt 1 ]]; then
+    MEDIA=""
+    FORM=()
+    for i in "${!PNGS[@]}"; do
+      MEDIA+="${MEDIA:+,}{\"type\":\"photo\",\"media\":\"attach://c$i\"}"
+      FORM+=(-F "c$i=@${PNGS[$i]}")
+    done
+    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMediaGroup" \
+      -F "chat_id=${TELEGRAM_CHAT_ID}" -F "media=[$MEDIA]" "${FORM[@]}" > /dev/null \
+      || echo "$(now) weekly charts failed to send (message itself went out fine)" >&2
   else
-    echo "$(now) weekly chart was not rendered (message itself went out fine)" >&2
+    echo "$(now) no weekly chart was rendered (message itself went out fine)" >&2
   fi
 fi
 

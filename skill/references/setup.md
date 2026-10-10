@@ -110,6 +110,14 @@ Work out, and show them as short lines:
   HR — runners who race their short runs are the most common pattern there
   is, and the most useful thing to find.
 
+While those six months are in hand, seed the training load — fitness takes
+six weeks of history to mean anything, and this is the only time the coach
+pulls that much:
+
+```bash
+python3 <skill>/scripts/analyze.py load --activities <json> --save
+```
+
 Then propose, and let them confirm or correct:
 
 - `hrmax` — measured if possible. If nothing credible exists, say so and use
@@ -251,8 +259,9 @@ the phone (home Wi-Fi only, Tailscale, or a reverse proxy). Generate
 rendered crontab), and have them press "Export now". `health.py summary`
 should then show data.
 
-**Voice notes** and the **weekly chart** are optional extras, also in
-`docs/deployment.md`.
+**Voice notes** and the **weekly charts** are optional extras, also in
+`docs/deployment.md`. The charts need `uv` on the machine;
+`doctor.py` says whether it's there.
 
 ## Step 7 — verify
 

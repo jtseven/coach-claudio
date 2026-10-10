@@ -69,7 +69,7 @@ hevy = false                 # gym routines in the Hevy app (needs Hevy Pro API 
 apple_health = false         # sleep, HRV, resting HR via Health Auto Export (iPhone)
 telegram = false             # chat + scheduled check-ins on your phone
 voice = false                # transcribe Telegram voice notes locally (whisper.cpp)
-weekly_chart = false         # PNG trend chart with the weekly close-out (matplotlib)
+weekly_chart = false         # PNG charts with the weekly close-out (needs uv)
 
 [activities]
 # Strava sport types that are commuting, not training: never counted,

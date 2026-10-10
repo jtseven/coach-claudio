@@ -119,6 +119,50 @@ expect_fail "weeklog refuses duplicate" "already in the weekly log" python3 "$S/
 expect "trend" "Ceiling for next week (+10% on last actual): 23.1 km" python3 "$S/analyze.py" trend
 expect "block" "Block W1-W1" python3 "$S/analyze.py" block
 
+echo "streams and the run log"
+python3 "$FIX/make_streams.py" "$TMP/streams.json"
+python3 "$FIX/make_streams.py" "$TMP/streams_nw.json" --no-watts
+expect "decoupling prefers power" "Decoupling (power:HR, after a 10-min warm-up): +3.2%" python3 "$S/analyze.py" streams --streams "$TMP/streams.json"
+expect "decoupling falls back to pace" "Decoupling (pace:HR, after a 10-min warm-up): +3.4%" python3 "$S/analyze.py" streams --streams "$TMP/streams_nw.json"
+expect "time in configured zones" "Z1 9% · Z2 91%" python3 "$S/analyze.py" streams --streams "$TMP/streams.json"
+expect "too short to decouple" "decoupling needs 30+ min" python3 "$S/analyze.py" streams --streams "$TMP/streams.json" --skip-warmup 3000
+expect_fail "append needs id and date" "--append needs --id and --date" python3 "$S/analyze.py" streams --streams "$TMP/streams.json" --append
+expect_fail "append rejects a bad date" "is not a date" python3 "$S/analyze.py" streams --streams "$TMP/streams.json" --append --id 500 --date 2026-09-31
+expect "append" "appended to the run log" python3 "$S/analyze.py" streams --streams "$TMP/streams.json" --append --id 500 --date 2026-09-01T18:00:00
+expect "append skips a logged run" "already in the run log" python3 "$S/analyze.py" streams --streams "$TMP/streams.json" --append --id 500 --date 2026-09-01
+expect "dry-run append writes nothing" "dry run" env COACH_DRY_RUN=1 python3 "$S/analyze.py" streams --streams "$TMP/streams.json" --append --id 599 --date 2026-09-02
+for i in 1 2 3 4 5 6 7; do
+  python3 "$S/analyze.py" streams --streams "$TMP/streams.json" --append --id "50$i" --date "$(printf "2026-09-%02d" $((1 + i * 4)))" >/dev/null
+done
+expect "runlog" "2026-09-29" python3 "$S/analyze.py" runlog
+expect "runlog --missing" "5  2026-09-13" python3 "$S/analyze.py" runlog --missing "$FIX/activities.json"
+expect "efficiency: pace at the ceiling" "5:34" python3 "$S/analyze.py" efficiency
+expect "efficiency lists long-run decoupling" "+3.2% (power)" python3 "$S/analyze.py" efficiency
+expect "zonedist" "Overall: 100% low" python3 "$S/analyze.py" zonedist
+
+echo "training load"
+expect_fail "load without history" "no training load yet" python3 "$S/analyze.py" load
+expect "dry-run load saves nothing" "not saved" env COACH_DRY_RUN=1 python3 "$S/analyze.py" load --activities "$FIX/activities.json" --save --until 2026-09-14
+expect_fail "dry run really saved nothing" "no training load yet" python3 "$S/analyze.py" load
+expect "load while seeding" "not judged until the history is long enough" python3 "$S/analyze.py" load --activities "$FIX/activities.json" --save --until 2026-09-14
+# Thu 10 Sep had a commute (2) and a gym session (15): only the gym counts.
+expect "load reads the saved history, no commutes" "Thu 15" python3 "$S/analyze.py" load --until 2026-09-14
+
+echo "critical speed"
+expect "cs from efforts" "Critical speed 4:35/km" python3 "$S/analyze.py" cs --effort 1000:240 --effort 1609:400 --effort 3000:780 --effort 5000:1340
+expect_fail "cs needs three distances" "need maximal efforts at 3+" python3 "$S/analyze.py" cs --effort 1000:240 --effort 5000:1340
+expect "cs warns about one activity" "All efforts came from one activity" python3 "$S/analyze.py" cs --performance '{"best_efforts":[{"type_value":"Fastest1k","value":285},{"type_value":"FastestMile","value":488},{"type_value":"Fastest2Mile","value":1012}]}'
+
+echo "charts"
+if command -v uv >/dev/null 2>&1; then
+  for c in weekly load aerobic; do
+    expect "charts.py $c" "$c.png" uv run --quiet --script "$S/charts.py" "$c"
+  done
+  expect "charts.py run" "run.png" uv run --quiet --script "$S/charts.py" run --streams "$TMP/streams.json"
+else
+  echo "  skip  charts (uv not installed)"
+fi
+
 echo "health"
 expect "summary without data" "no health data yet" python3 "$S/health.py" summary
 python3 "$FIX/make_health.py" "$COACH_HOME/athlete/state/health/daily"

@@ -43,6 +43,7 @@ Mon 19:12  Clean - 145 average, 4% of the run above the ceiling, all on the
 | Claude Code with a Claude subscription | everything |
 | Strava | everything — it's the ground truth |
 | Python 3.11+ | the scripts (standard library only) |
+| [uv](https://docs.astral.sh/uv/) | charts (it fetches matplotlib for them) |
 | Google Calendar (claude.ai connector) | the plan in your calendar (recommended) |
 | An always-on Linux or macOS machine + Telegram | check-ins on your phone |
 | iPhone + Apple Watch + Health Auto Export app | sleep, HRV, recovery data |

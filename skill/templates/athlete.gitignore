@@ -3,6 +3,7 @@
 # their own - keep them on the machine only.
 state/health/
 state/weekly_chart.png
+state/charts/
 state/postrun.lock
 state/postrun_failures
 state/typing-*.pid

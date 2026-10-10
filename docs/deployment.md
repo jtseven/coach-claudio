@@ -41,8 +41,8 @@ For chat-only use (no scheduled check-ins), your everyday computer is enough.
 - For Telegram: `tmux`, and the Telegram plugin (it runs on `bun`, which the
   plugin installs or tells you to install).
 - For Hevy: Node.js (`npx`).
-- For the weekly chart: a venv with matplotlib. For voice notes: `ffmpeg` and
-  whisper.cpp.
+- For charts: [uv](https://docs.astral.sh/uv/), which fetches matplotlib
+  for `charts.py` on its own. For voice notes: `ffmpeg` and whisper.cpp.
 
 ## Layout
 
@@ -62,11 +62,12 @@ claude-running-coach/       <- this repo (the "coach home")
 │   └── state/
 │       ├── checkin_log.jsonl   <- what the coach has already said
 │       ├── weekly_log.jsonl    <- planned vs actual, one line per week
+│       ├── run_log.jsonl       <- per-run efficiency, decoupling, zone time
+│       ├── load_log.json       <- relative effort per activity, for fitness/form
 │       ├── niggles.jsonl       <- pain/niggle reports, open and resolved
 │       ├── postrun_seen.txt    <- activity ids the post-run watcher handled
 │       └── health/daily/       <- Apple Health exports, one JSON per day
 ├── .env                    <- gitignored secrets
-├── venv/                   <- optional, matplotlib for the weekly chart
 ├── vendor/                 <- optional, whisper.cpp for voice notes
 ├── outbox/                 <- messages that failed to send
 └── logs/
@@ -158,6 +159,16 @@ into context.
 **`weekly_log.jsonl`** — one line per completed week, written by the weekly
 close-out through `analyze.py weeklog --append`, which refuses a duplicate
 week.
+
+**`run_log.jsonl`** — one line per analysed run, written by `analyze.py
+streams --append` (post-run reaction, or the close-out for runs it missed):
+efficiency, decoupling, time in zones. Feeds `efficiency`, `zonedist` and
+the aerobic chart. A run already logged is skipped, not duplicated.
+
+**`load_log.json`** — Strava's relative effort per activity id, written by
+`analyze.py load --save`. Keyed by id, so re-saving a week overwrites rather
+than doubles. Seeded once with 90+ days at setup; each close-out adds its
+week. Losing it means fitness reads low until it is seeded again.
 
 **`niggles.jsonl`** — pain and niggle reports via `coachlog.py niggle`.
 Latest line per `area` wins; a resolved line closes one.
@@ -356,17 +367,25 @@ backup. Losing it costs baseline depth, not function.
 
 ## Weekly chart
 
-The weekly close-out can be followed by a PNG: running km vs target,
-training hours by sport, and easy-run discipline, rendered from the weekly
-log by `analyze.py chart`. matplotlib usually can't be installed system-wide
-(PEP 668), so:
+The weekly close-out can be followed by up to three PNGs, sent as one album:
+the weekly log (running km vs target, hours by sport, easy runs held),
+training load (fitness, fatigue, form), and the aerobic base (weekly time in
+HR zones, easy-run efficiency). Each needs its data — a chart with nothing
+to draw is skipped.
+
+They come from `skill/scripts/charts.py`, the one script with a dependency.
+It declares matplotlib inline (PEP 723), and uv builds and caches that
+environment on first use — there is no venv to create or upgrade:
 
 ```bash
-python3 -m venv venv && venv/bin/pip install matplotlib
+curl -LsSf https://astral.sh/uv/install.sh | sh     # once, if uv is missing
+uv run --script skill/scripts/charts.py check        # first run downloads matplotlib
 ```
 
-and `integrations.weekly_chart = true`. Every failure is non-fatal — the text
-message always outranks the picture.
+Then set `integrations.weekly_chart = true`; `doctor.py` checks the
+chain. A `venv/` with matplotlib from an older setup still works as a
+fallback when uv is absent. Every failure is non-fatal — the text message
+always outranks the pictures.
 
 ## Voice messages
 
@@ -482,6 +501,13 @@ clone your private repo. Then recreate `.env` and `coach.py crontab`.
 git pull                    # layout B: git pull upstream main
 python3 skill/scripts/doctor.py
 ```
+
+In layout B the nightly `backup.sh` does this itself: after committing the
+day's data it fetches `upstream` (branch `UPSTREAM_BRANCH` from `.env`,
+default `main`), merges it, and runs `tests/run.sh`. A conflicting merge is
+aborted and a failing one rolled back, each with a Telegram alert — the
+coach keeps running on the engine it had. Keep your engine changes out of
+`skill/` (prompt overrides go in `athlete/prompts/`) and merges stay clean.
 
 `athlete/` is untouched by updates. If you've overridden a prompt in
 `athlete/prompts/`, compare it with the new `skill/prompts/` version.

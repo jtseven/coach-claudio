@@ -12,10 +12,15 @@ Subcommands:
   weeklog   Build one weekly_log.jsonl entry: planned vs actual, ceiling
   trend     Read the weekly log back as a progression
   block     Last training block against the previous one (monthly review)
-  chart     Render the weekly log as a PNG (volume, hours by sport, easy runs)
+  load      Fitness, fatigue and form (CTL/ATL/TSB) from Strava relative effort
+  streams   One activity's streams: decoupling, efficiency, time in zones
+  runlog    The per-run log those feed, or the runs missing from it
+  efficiency  Easy-run efficiency over the weeks, long-run decoupling
+  zonedist  Weekly time by intensity: low / mid / high
+  cs        Critical speed and D' from best efforts
 
-Everything is standard library except `chart`, which needs matplotlib and
-must run under the project venv:  <coach home>/venv/bin/python3
+Charts of all of this are in charts.py, which needs matplotlib and runs
+through uv:  uv run --script <skill>/scripts/charts.py --help
 
 Personal numbers - HRmax, zones, easy ceiling, VDOT, power band, commute
 types - come from athlete/config.toml (see coachconf.py), never from here.
@@ -391,13 +396,8 @@ CEILING_TIME_TOLERANCE_PCT = 20
 WEEKLOG_NOTE_MAX = 300
 
 
-def load_activities(arg):
-    """Accept a file path, '-' for stdin, or a raw JSON string.
-
-    The MCP tool hands back JSON in a couple of shapes depending on how it's
-    called, so unwrap the common envelopes rather than making the caller
-    reshape it by hand.
-    """
+def read_json(arg):
+    """A file path, '-' for stdin, or the JSON itself."""
     if arg == "-":
         raw = sys.stdin.read()
     elif arg.lstrip()[:1] in "[{":
@@ -405,7 +405,17 @@ def load_activities(arg):
     else:
         with open(arg) as fh:
             raw = fh.read()
-    data = json.loads(raw)
+    return json.loads(raw)
+
+
+def load_activities(arg):
+    """Accept a file path, '-' for stdin, or a raw JSON string.
+
+    The MCP tool hands back JSON in a couple of shapes depending on how it's
+    called, so unwrap the common envelopes rather than making the caller
+    reshape it by hand.
+    """
+    data = read_json(arg)
     if isinstance(data, dict):
         for key in ("activities", "results", "data"):
             if isinstance(data.get(key), list):
@@ -773,168 +783,717 @@ def cmd_block(args):
 
 
 # --------------------------------------------------------------------------
-# weekly chart
+# training load: fitness, fatigue and form
 # --------------------------------------------------------------------------
 #
-# Sent to Telegram with the Sunday close-out. Three stacked panels on one x
-# axis (never a dual-axis chart):
-#   1. running km against target - the marathon's number
-#   2. training hours by kind, stacked - the whole athlete: runs, rides and
-#      hikes, gym, climbing.
-#   3. easy-run discipline, deliberately the smallest panel - still tracked,
-#      no longer the headline.
-# Colors are the validated four-slot categorical order (blue, orange, aqua,
-# yellow); running keeps slot 1 in both panels so it reads as one entity.
-# Aqua and yellow sit under 3:1 contrast, which the legend and the total
-# label on each bar relieve.
+# The classic performance-management model: each day's training load feeds
+# two exponentially weighted averages, a slow one (fitness, 42 days) and a
+# fast one (fatigue, 7 days). Form is the gap between them.
+#
+# The load per activity is Strava's relative_effort - its own HR-based
+# score, present in list_activities, so a whole season costs one call rather
+# than one stream per activity. Activities recorded without HR have none and
+# count as zero; the output says how many. Commutes never count.
+#
+# Absolute numbers are on Strava's scale, not TSS, so thresholds are judged
+# on form as a percentage of fitness, which doesn't care about the scale.
+#
+# Load is remembered in athlete/state/load_log.json, keyed by activity id
+# (--save), so after one 90-day seed each close-out only has to add its week.
 
-CHART_COLORS = {
-    "surface": "#fcfcfb",
-    "ink": "#0b0b0b",
-    "ink2": "#52514e",
-    "grid": "#e8e8e4",
-    "run": "#2a78d6",       # slot 1
-    "strength": "#eb6834",  # slot 2
-    "endurance": "#1baf7a", # slot 3
-    "climb": "#eda100",     # slot 4
-}
-
-HOURS_SERIES = [  # (log field, label, color key) - bottom to top
-    ("run_h", "running", "run"),
-    ("other_aerobic_h", "ride / hike / other endurance", "endurance"),
-    ("strength_h", "gym", "strength"),
-    ("climb_h", "climbing", "climb"),
+CTL_DAYS = 42
+ATL_DAYS = 7
+# Form as % of fitness, the bands intervals.icu popularised.
+FORM_BANDS = [
+    (-30, "high risk: fatigue well beyond what fitness absorbs"),
+    (-10, "productive: carrying training load"),
+    (5, "neutral"),
+    (25, "fresh: race-ready, or a down week"),
+    (None, "very fresh: fitness is starting to decay"),
 ]
 
 
-def cmd_chart(args):
+def read_load_log():
     try:
-        import matplotlib
+        return json.loads(cc.LOAD_LOG.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
 
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        from matplotlib.lines import Line2D
-        from matplotlib.patches import Patch
-    except ImportError:
-        sys.exit(
-            "chart needs matplotlib - run it under the venv:\n"
-            f"  {cc.VENV_PY} {cc.SCRIPTS}/analyze.py chart"
-        )
 
-    try:
-        with open(args.log) as fh:
-            rows = [json.loads(l) for l in fh if l.strip()]
-    except FileNotFoundError:
-        sys.exit(f"no weekly log at {args.log} - nothing logged yet")
-    rows = rows[-args.last :]
-    if not rows:
-        sys.exit("weekly log is empty")
+def daily_load_series(store, until):
+    """[(date, load, ctl, atl)] from the first stored day through `until`."""
+    from collections import defaultdict
+    from datetime import date, timedelta
 
-    C = CHART_COLORS
-    labels = [
-        f"W{r['week']}" if r.get("week") is not None else r.get("week_of", "?")[5:]
-        for r in rows
+    per_day = defaultdict(float)
+    for rec in store.values():
+        per_day[rec["date"]] += rec.get("load") or 0
+    if not per_day:
+        return []
+    day = date.fromisoformat(min(per_day))
+    ctl = atl = 0.0
+    out = []
+    while day <= until:
+        load = per_day.get(day.isoformat(), 0.0)
+        ctl += (load - ctl) / CTL_DAYS
+        atl += (load - atl) / ATL_DAYS
+        out.append((day, load, ctl, atl))
+        day += timedelta(days=1)
+    return out
+
+
+def form_band(pct):
+    for limit, label in FORM_BANDS:
+        if limit is None or pct < limit:
+            return label
+
+
+def cmd_load(args):
+    from datetime import date
+
+    store = read_load_log()
+    added = 0
+    if args.activities:
+        for a in load_activities(args.activities):
+            sport = field(a, "sport_type", "type", default="")
+            day = str(field(a, "start_local", "start_date_local", default=""))[:10]
+            if not day or sport in COMMUTE_TYPES or a.get("id") is None:
+                continue
+            effort = field(a, "relative_effort", "suffer_score")
+            store[str(a["id"])] = {"date": day, "sport": sport,
+                                   "load": effort if effort is not None else None}
+            added += 1
+    if args.save and added and cc.write_allowed("load log"):
+        tmp = cc.LOAD_LOG.with_suffix(".tmp")
+        tmp.write_text(json.dumps(store, indent=0, sort_keys=True))
+        tmp.replace(cc.LOAD_LOG)
+    until = date.fromisoformat(args.until) if args.until else date.today()
+    series = daily_load_series(store, until)
+    if not series:
+        sys.exit("no training load yet - pass --activities (90+ days the first time) "
+                 "and --save to remember them")
+
+    day, _, ctl, atl = series[-1]
+    tsb = ctl - atl
+    form_pct = tsb / ctl * 100 if ctl else 0.0
+    week_ago = series[-8] if len(series) >= 8 else series[0]
+    ramp = ctl - week_ago[2]
+    span = len(series)
+    no_hr = sum(1 for r in store.values() if r.get("load") is None)
+    last_activity = max(r["date"] for r in store.values())
+
+    payload = {
+        "as_of": day.isoformat(),
+        "fitness_ctl": round(ctl, 1),
+        "fatigue_atl": round(atl, 1),
+        "form_tsb": round(tsb, 1),
+        "form_pct": round(form_pct),
+        "form_band": None if span < CTL_DAYS else form_band(form_pct),
+        "ramp_7d": round(ramp, 1),
+        "ramp_7d_pct": round(ramp / week_ago[2] * 100) if week_ago[2] else None,
+        "history_days": span,
+        "seeding": span < CTL_DAYS,
+        "activities_without_effort": no_hr,
+        "last_activity": last_activity,
+        "added": added,
+        "series": [{"date": d.isoformat(), "load": round(l), "ctl": round(c, 1),
+                    "atl": round(a, 1), "tsb": round(c - a, 1)}
+                   for d, l, c, a in series[-args.days:]],
+    }
+    lines = [
+        f"Training load after {day.isoformat()} (Strava relative effort, all sports but commutes)",
+        f"  fitness (42 d)  {ctl:6.1f}   7 days ago {week_ago[2]:.1f} ({ramp:+.1f})",
+        f"  fatigue  (7 d)  {atl:6.1f}",
+        f"  form            {tsb:+6.1f}   = {form_pct:+.0f}% of fitness: "
+        + ("not judged until the history is long enough" if span < CTL_DAYS
+           else form_band(form_pct)),
+        "",
+        "Last 7 days: " + " · ".join(f"{d.strftime('%a')} {l:.0f}" for d, l, _, _ in series[-7:]),
     ]
-    xs = list(range(len(rows)))
-    actual = [r.get("actual_km", 0) or 0 for r in rows]
-    target = [r.get("target_km", 0) or 0 for r in rows]
+    if span < CTL_DAYS:
+        lines.append(f"Only {span} days of history: fitness is understated until about "
+                     f"{CTL_DAYS} days are loaded - pass 90+ days of activities once with --save.")
+    if no_hr:
+        lines.append(f"{no_hr} activities had no relative effort (no HR) and count as 0.")
+    lines.append(f"Latest activity in the history: {last_activity}"
+                 + ("" if not args.activities else f" ({added} read, "
+                    + ("saved" if args.save and not cc.DRY_RUN else "not saved") + ")"))
+    emit(payload, lines, args.json)
 
-    fig, (ax1, axh, ax2) = plt.subplots(
-        3, 1, sharex=True, figsize=(8, 7.2), dpi=150,
-        gridspec_kw={"height_ratios": [3, 2.6, 1.1], "hspace": 0.18},
-    )
-    fig.patch.set_facecolor(C["surface"])
 
-    for ax in (ax1, axh, ax2):
-        ax.set_facecolor(C["surface"])
-        for side in ("top", "right", "left"):
-            ax.spines[side].set_visible(False)
-        ax.spines["bottom"].set_color(C["grid"])
-        ax.grid(axis="y", color=C["grid"], linewidth=0.8)
-        ax.set_axisbelow(True)
-        ax.tick_params(colors=C["ink2"], length=0)
+# --------------------------------------------------------------------------
+# one activity's streams: decoupling, efficiency, time in zones
+# --------------------------------------------------------------------------
+#
+# Input is get_activity_streams output. Ask for time, heart_rate,
+# velocity_smooth, moving (+ watts when the run has power, + distance and
+# altitude for the hill check and charts) at resolution ~300: that is a
+# sample every 10-30 s, plenty for halves and zones, and small enough to pass
+# through a file.
+#
+# Aerobic decoupling compares the efficiency of the first half of the steady
+# part of a run with the second. Efficiency is output per heartbeat: speed
+# (m/min) per beat, or watts per beat when power exists - preferred, because
+# power doesn't care about hills. Below 5% the athlete is aerobically solid at
+# that effort; above 10% the effort outran their aerobic base (or heat,
+# dehydration, fuelling).
 
-    # -- 1. running volume: actual bars, target as a neutral tick --
-    ax1.bar(xs, actual, width=0.62, color=C["run"], zorder=3)
-    for x, km, t in zip(xs, actual, target):
-        if km:
-            y = max(km, t) if abs(km - t) < 2.5 else km
-            ax1.annotate(
-                f"{km:.0f}", (x, y), textcoords="offset points",
-                xytext=(0, 4), ha="center", fontsize=8, color=C["ink"], zorder=4,
-            )
-    for x, t in zip(xs, target):
-        if t:
-            ax1.hlines(t, x - 0.38, x + 0.38, color=C["ink2"], linewidth=2, zorder=4)
-    ax1.set_ylabel("running km", fontsize=9, color=C["ink2"])
-    ax1.set_title("Training, week by week", loc="left", fontsize=12,
-                  color=C["ink"], pad=12)
-    handles = [Patch(facecolor=C["run"], label="ran")]
-    if any(target):
-        handles.append(Line2D([], [], color=C["ink2"], linewidth=2, label="target"))
-    ax1.legend(handles=handles, loc="upper left", frameon=False, fontsize=8,
-               labelcolor=C["ink2"], handlelength=1.4)
+DECOUPLE_MIN_S = 30 * 60   # steady time needed after the warm-up
+EASY_RUN_MIN_S = 20 * 60   # shorter runs are too noisy for the efficiency trend
+STREAM_ALIASES = {"heartrate": "heart_rate", "velocity": "velocity_smooth"}
 
-    # -- 2. hours by kind, stacked. Weeks logged before the split carry no
-    #       per-kind fields and are left empty rather than guessed. --
-    split = [any(f in r for f, _, _ in HOURS_SERIES) for r in rows]
-    totals = [sum((r.get(f) or 0) for f, _, _ in HOURS_SERIES) if ok else 0
-              for r, ok in zip(rows, split)]
-    # One holiday week (24 h on a bike tour) would flatten every normal week, so
-    # the axis caps at the ordinary range and an over-cap bar says its total.
-    ordinary = sorted(t for t in totals if t)
-    cap = max(8.0, (ordinary[-2] if len(ordinary) > 1 else ordinary[-1] if ordinary else 8) * 1.35)
-    bottoms = [0.0] * len(rows)
-    for f, lab, ck in HOURS_SERIES:
-        vals = [(r.get(f) or 0) if ok else 0 for r, ok in zip(rows, split)]
-        if not any(vals):
+
+def parse_streams(data):
+    """{name: list} from the MCP shape, the raw API's list or keyed shape."""
+    if isinstance(data, dict) and isinstance(data.get("streams"), (dict, list)):
+        data = data["streams"]
+    out = {}
+    if isinstance(data, list):
+        for s in data:
+            if isinstance(s, dict) and "type" in s:
+                out[s["type"]] = s.get("data", [])
+    elif isinstance(data, dict):
+        for k, v in data.items():
+            out[k] = v.get("data", []) if isinstance(v, dict) else v
+    return {STREAM_ALIASES.get(k, k): v for k, v in out.items() if isinstance(v, list)}
+
+
+def stream_samples(st):
+    """One dict per sample, weighted by the seconds since the previous one."""
+    t = st.get("time")
+    if not t:
+        sys.exit("streams need a time stream")
+    n = len(t)
+    for k, v in st.items():
+        if len(v) != n:
+            sys.exit(f"stream {k} has {len(v)} samples, time has {n}")
+
+    def at(name, i):
+        s = st.get(name)
+        return s[i] if s else None
+
+    out = []
+    for i in range(1, n):
+        dt = t[i] - t[i - 1]
+        if dt <= 0:
             continue
-        shown = [max(0.0, min(v, cap - b)) for v, b in zip(vals, bottoms)]
-        axh.bar(xs, shown, width=0.62, bottom=bottoms, color=C[ck],
-                edgecolor=C["surface"], linewidth=1, zorder=3, label=lab)
-        bottoms = [b + v for b, v in zip(bottoms, shown)]
-    for x, t, ok in zip(xs, totals, split):
-        if ok and t:
-            over = t > cap
-            axh.annotate(
-                f"{t:.0f} h" + (" ↑" if over else ""), (x, min(t, cap)),
-                textcoords="offset points", xytext=(0, 3), ha="center",
-                fontsize=8, color=C["ink"], zorder=4,
-            )
-    axh.set_ylim(0, cap * 1.15)
-    axh.set_ylabel("hours\nby sport", fontsize=9, color=C["ink2"])
-    axh.legend(loc="upper left", frameon=False, fontsize=7.5, ncol=4,
-               labelcolor=C["ink2"], handlelength=1.2, columnspacing=1.0,
-               bbox_to_anchor=(0, 1.12))
+        v = at("velocity_smooth", i)
+        moving = at("moving", i)
+        if moving is None:
+            moving = v is None or v > 0.5
+        out.append({"dt": dt, "moving": bool(moving), "hr": at("heart_rate", i),
+                    "v": v, "w": at("watts", i), "alt": at("altitude", i),
+                    "d": at("distance", i)})
+    return out
 
-    # -- 3. easy-run discipline, small and neutral --
-    pts = [
-        (x, r["easy_runs_under_ceiling"] / r["easy_runs_rated"] * 100,
-         f"{r['easy_runs_under_ceiling']}/{r['easy_runs_rated']}")
-        for x, r in zip(xs, rows)
-        if r.get("easy_runs_rated")
-    ]
-    ax2.set_ylim(-15, 135)
-    ax2.set_yticks([0, 100])
-    ax2.set_yticklabels(["0%", "100%"], fontsize=7)
-    ax2.set_ylabel("easy runs\nheld", fontsize=8, color=C["ink2"])
-    if pts:
-        ax2.plot([p[0] for p in pts], [p[1] for p in pts], color=C["ink2"],
-                 linewidth=1.5, marker="o", markersize=5,
-                 markeredgecolor=C["surface"], markeredgewidth=1.2, zorder=3)
-        for x, y, lab in pts:
-            ax2.annotate(lab, (x, y), textcoords="offset points", xytext=(0, 6),
-                         ha="center", fontsize=7, color=C["ink2"], zorder=4)
+
+def _wavg(samples, key):
+    tot = sum(s["dt"] for s in samples if s[key] is not None)
+    if not tot:
+        return None
+    return sum(s[key] * s["dt"] for s in samples if s[key] is not None) / tot
+
+
+def _gain(samples):
+    alts = [s["alt"] for s in samples if s["alt"] is not None]
+    return sum(max(0.0, b - a) for a, b in zip(alts, alts[1:]))
+
+
+def _km(samples):
+    ds = [s["d"] for s in samples if s["d"] is not None]
+    if len(ds) >= 2:
+        return (ds[-1] - ds[0]) / 1000.0
+    return sum((s["v"] or 0) * s["dt"] for s in samples) / 1000.0
+
+
+def hr_zones():
+    """[(label, lo, hi)] - configured, else derived from HRmax, else []."""
+    own = configured_zones()
+    if own:
+        return own
+    hrmax = cc.get("physiology.hrmax")
+    if not hrmax:
+        return []
+    return [(label, round(lo * hrmax) if lo else None, round(hi * hrmax) if hi else None)
+            for label, lo, hi in PCT_ZONES]
+
+
+def zone_index(zones, hr):
+    rh = round(hr)
+    for i, (_, _, hi) in enumerate(zones):
+        if hi is None or rh <= hi:
+            return i
+    return len(zones) - 1
+
+
+def intensity(hr, ceiling, threshold, zones):
+    """low / mid / high: the three-zone view the polarisation check uses."""
+    if hr <= ceiling:
+        return "low"
+    if threshold:
+        return "high" if hr >= threshold else "mid"
+    return "high" if zones and zone_index(zones, hr) >= 3 else "mid"
+
+
+def decoupling(samples, skip_s):
+    """First half against second half of the moving time after the warm-up."""
+    steady, skipped = [], 0
+    for s in samples:
+        if not s["moving"] or not s["hr"] or s["hr"] <= 0:
+            continue
+        if skipped < skip_s:
+            skipped += s["dt"]
+            continue
+        steady.append(s)
+    total = sum(s["dt"] for s in steady)
+    if total < DECOUPLE_MIN_S:
+        return {"steady_s": total, "reason": f"only {fmt_time(total)} steady after the "
+                f"warm-up; decoupling needs {DECOUPLE_MIN_S // 60}+ min"}
+    acc, cut = 0, len(steady)
+    for i, s in enumerate(steady):
+        acc += s["dt"]
+        if acc >= total / 2:
+            cut = i + 1
+            break
+    halves = [steady[:cut], steady[cut:]]
+    has_power = all(any((s["w"] or 0) > 0 for s in h) for h in halves)
+    basis = "power" if has_power else "pace"
+    res = {"steady_s": total, "basis": basis, "halves": []}
+    for h in halves:
+        hr = _wavg(h, "hr")
+        km = _km(h)
+        half = {"avg_hr": round(hr, 1), "km": round(km, 2),
+                "gain_m": round(_gain(h)), "net_m": None}
+        alts = [s["alt"] for s in h if s["alt"] is not None]
+        if alts:
+            half["net_m"] = round(alts[-1] - alts[0])
+        if basis == "power":
+            w = _wavg([s for s in h if (s["w"] or 0) > 0], "w")
+            half["avg_watts"] = round(w, 1)
+            half["ef"] = w / hr
+        else:
+            v = _wavg(h, "v")
+            if v is None:
+                return {"steady_s": total, "reason": "no velocity_smooth or watts stream"}
+            half["pace"] = fmt_pace(1000 / v) if v else "-"
+            half["ef"] = v * 60 / hr
+        res["halves"].append(half)
+    e1, e2 = res["halves"][0]["ef"], res["halves"][1]["ef"]
+    res["pct"] = round((e1 - e2) / e1 * 100, 1)
+    for h in res["halves"]:
+        h["ef"] = round(h["ef"], 3)
+    if basis == "pace":
+        # Pace-based decoupling is only fair if both halves climb alike.
+        per_km = [h["gain_m"] / h["km"] if h["km"] else 0 for h in res["halves"]]
+        nets = [(h["net_m"] or 0) / h["km"] if h["km"] else 0 for h in res["halves"]]
+        if abs(per_km[0] - per_km[1]) > 5 or abs(nets[0] - nets[1]) > 5:
+            res["terrain_warning"] = (
+                f"halves differ in terrain ({per_km[0]:.0f} vs {per_km[1]:.0f} m/km climbing, "
+                f"net {nets[0]:+.0f} vs {nets[1]:+.0f} m/km) - pace decoupling is unreliable here")
+    return res
+
+
+def decoupling_verdict(pct):
+    if pct < -5:
+        return "negative: HR fell against output - easier second half, downhill, or an HR artifact"
+    if pct < 5:
+        return "coupled: aerobically solid at this effort"
+    if pct <= 10:
+        return "some drift: the effort is near the edge of the aerobic base, or heat/fuelling"
+    return "decoupled: the effort outran the aerobic base (or heat, dehydration, no fuel)"
+
+
+def analyse_streams(st, ceiling, skip_s):
+    samples = stream_samples(st)
+    moving = [s for s in samples if s["moving"]]
+    with_hr = [s for s in moving if s["hr"] and s["hr"] > 0]
+    moving_s = sum(s["dt"] for s in moving)
+    res = {"moving_s": moving_s, "km": round(_km(moving), 2)}
+    if not with_hr:
+        res["note"] = "no heart rate in these streams"
+        return res
+    hr = _wavg(with_hr, "hr")
+    v = _wavg(moving, "v")
+    res["avg_hr"] = round(hr, 1)
+    if v:
+        res["pace"] = fmt_pace(1000 / v)
+        res["ef"] = round(v * 60 / hr, 3)
+    powered = [s for s in with_hr if (s["w"] or 0) > 0]
+    if powered:
+        res["avg_watts"] = round(_wavg(powered, "w"), 1)
+        res["wpb"] = round(res["avg_watts"] / _wavg(powered, "hr"), 3)
+    if res["km"]:
+        res["gain_m_per_km"] = round(_gain(moving) / res["km"], 1)
+
+    hr_s = sum(s["dt"] for s in with_hr)
+    if ceiling:
+        above = sum(s["dt"] for s in with_hr if s["hr"] > ceiling)
+        res["pct_above_ceiling"] = round(above / hr_s * 100, 1)
+    zones = hr_zones()
+    if zones:
+        zs = [0] * len(zones)
+        for s in with_hr:
+            zs[zone_index(zones, s["hr"])] += s["dt"]
+        res["zone_labels"] = [z[0] for z in zones]
+        res["zone_s"] = zs
+    if ceiling:
+        threshold = cc.get("physiology.threshold_hr")
+        buckets = {"low": 0, "mid": 0, "high": 0}
+        for s in with_hr:
+            buckets[intensity(s["hr"], ceiling, threshold, zones)] += s["dt"]
+        res["intensity_s"] = buckets
+    res["decoupling"] = decoupling(samples, skip_s)
+    return res
+
+
+def read_run_log():
+    if not cc.RUN_LOG.exists():
+        return []
+    rows = []
+    for line in cc.RUN_LOG.read_text().splitlines():
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def cmd_streams(args):
+    ceiling = args.ceiling or cc.easy_ceiling()
+    res = analyse_streams(parse_streams(read_json(args.streams)), ceiling, args.skip_warmup)
+    lines = [f"{res['km']:.2f} km, {fmt_time(res['moving_s'])} moving"]
+    if "avg_hr" in res:
+        bits = [f"avg HR {res['avg_hr']:g}"]
+        if "pace" in res:
+            bits.append(f"{res['pace']}/km")
+            bits.append(f"efficiency {res['ef']:.2f} m/min per beat")
+        if "wpb" in res:
+            bits.append(f"{res['avg_watts']:g} W, {res['wpb']:.2f} W/beat")
+        lines.append("  " + ", ".join(bits))
+        if "gain_m_per_km" in res:
+            lines.append(f"  climbing {res['gain_m_per_km']:g} m/km")
+        if "pct_above_ceiling" in res:
+            lines.append(f"  {res['pct_above_ceiling']:g}% of the time above the "
+                         f"{ceiling:g} ceiling")
+        if "zone_s" in res:
+            tot = sum(res["zone_s"]) or 1
+            lines.append("  zones: " + " · ".join(
+                f"{lab.split()[0]} {s / tot * 100:.0f}%"
+                for lab, s in zip(res["zone_labels"], res["zone_s"])))
+        d = res["decoupling"]
+        if "pct" in d:
+            h1, h2 = d["halves"]
+            out1 = f"{h1['avg_watts']:g} W" if d["basis"] == "power" else f"{h1['pace']}/km"
+            out2 = f"{h2['avg_watts']:g} W" if d["basis"] == "power" else f"{h2['pace']}/km"
+            lines += [
+                f"Decoupling ({d['basis']}:HR, after a {args.skip_warmup // 60}-min warm-up): "
+                f"{d['pct']:+.1f}%",
+                f"  1st half {out1} at {h1['avg_hr']:g} bpm, 2nd half {out2} at {h2['avg_hr']:g} bpm",
+                f"  {decoupling_verdict(d['pct'])}",
+            ]
+            if "terrain_warning" in d:
+                lines.append(f"  WARNING: {d['terrain_warning']}")
+        else:
+            lines.append(f"Decoupling: {d['reason']}")
     else:
-        ax2.text(0.5, 0.5, "no easy runs rated yet", transform=ax2.transAxes,
-                 ha="center", fontsize=8, color=C["ink2"])
+        lines.append(res["note"])
 
-    ax2.set_xticks(xs)
-    ax2.set_xticklabels(labels, fontsize=8)
-    ax2.set_xlim(-0.6, len(rows) - 0.4)
+    if args.append:
+        if not (args.id and args.date):
+            sys.exit("--append needs --id and --date (the activity's start_local)")
+        from datetime import date
 
-    fig.savefig(args.out, bbox_inches="tight", facecolor=C["surface"])
-    print(args.out)
+        try:
+            date.fromisoformat(args.date[:10])
+        except ValueError:
+            sys.exit(f"--date {args.date!r} is not a date - pass the activity's start_local")
+        if any(str(r.get("id")) == str(args.id) for r in read_run_log()):
+            lines.append(f"activity {args.id} is already in the run log - not appended")
+        else:
+            d = res.get("decoupling", {})
+            entry = {"id": str(args.id), "date": args.date[:10], "sport": args.sport,
+                     **{k: res[k] for k in ("km", "moving_s", "avg_hr", "pace", "ef",
+                                            "avg_watts", "wpb", "gain_m_per_km",
+                                            "pct_above_ceiling", "zone_labels", "zone_s",
+                                            "intensity_s") if k in res}}
+            if "pct" in d:
+                entry["decoupling_pct"] = d["pct"]
+                entry["decoupling_basis"] = d["basis"]
+            if cc.write_allowed("run log entry"):
+                with cc.RUN_LOG.open("a") as fh:
+                    fh.write(json.dumps(entry) + "\n")
+                lines.append("appended to the run log")
+    emit(res, lines, args.json)
+
+
+def cmd_runlog(args):
+    rows = read_run_log()
+    if args.missing:
+        logged = {str(r.get("id")) for r in rows}
+        missing = [a for a in load_activities(args.missing)
+                   if field(a, "sport_type", "type", default="") in RUN_TYPES
+                   and str(a.get("id")) not in logged]
+        payload = {"missing": [{"id": str(a.get("id")),
+                                "date": str(field(a, "start_local", "start_date_local",
+                                                  default=""))[:10],
+                                "name": a.get("name", "")} for a in missing]}
+        lines = ([f"{m['id']}  {m['date']}  {m['name']}" for m in payload["missing"]]
+                 or ["every run is in the run log"])
+        emit(payload, lines, args.json)
+        return
+    rows = rows[-args.last:]
+    if not rows:
+        sys.exit("run log is empty - `analyze.py streams --append` adds runs")
+    lines = [f"{'date':<11}{'km':>6}{'HR':>6}{'EF':>6}{'W/b':>6}{'>ceil':>7}{'decoup':>8}"]
+    for r in rows:
+        def f(k, fmt):
+            return fmt.format(r[k]) if r.get(k) is not None else "-"
+        lines.append(f"{r.get('date', '?'):<11}{f('km', '{:.1f}'):>6}{f('avg_hr', '{:.0f}'):>6}"
+                     f"{f('ef', '{:.2f}'):>6}{f('wpb', '{:.2f}'):>6}"
+                     f"{f('pct_above_ceiling', '{:.0f}%'):>7}{f('decoupling_pct', '{:+.1f}%'):>8}")
+    emit({"runs": rows}, lines, args.json)
+
+
+# --------------------------------------------------------------------------
+# trends from the run log: easy-run efficiency, intensity distribution
+# --------------------------------------------------------------------------
+
+
+def _monday(day):
+    from datetime import date, timedelta
+
+    d = date.fromisoformat(day[:10])
+    return (d - timedelta(days=d.weekday())).isoformat()
+
+
+def _median(xs):
+    import statistics
+
+    return statistics.median(xs) if xs else None
+
+
+def is_easy(r):
+    return (r.get("pct_above_ceiling") is not None
+            and r["pct_above_ceiling"] <= CEILING_TIME_TOLERANCE_PCT
+            and (r.get("moving_s") or 0) >= EASY_RUN_MIN_S)
+
+
+def efficiency_weeks(rows, weeks):
+    """[(monday, {n, ef, wpb, gain})] for easy runs, the last `weeks` weeks."""
+    from collections import defaultdict
+
+    by = defaultdict(list)
+    for r in rows:
+        if r.get("sport", "Run") in RUN_TYPES and is_easy(r):
+            by[_monday(r["date"])].append(r)
+    out = []
+    for monday in sorted(by)[-weeks:]:
+        rs = by[monday]
+        out.append((monday, {
+            "n": len(rs),
+            "ef": _median([r["ef"] for r in rs if r.get("ef")]),
+            "wpb": _median([r["wpb"] for r in rs if r.get("wpb")]),
+            "gain": _median([r["gain_m_per_km"] for r in rs if r.get("gain_m_per_km") is not None]),
+            "hr": _median([r["avg_hr"] for r in rs if r.get("avg_hr")]),
+        }))
+    return out
+
+
+def cmd_efficiency(args):
+    rows = read_run_log()
+    weeks = efficiency_weeks(rows, args.weeks)
+    if not weeks:
+        sys.exit("no easy runs in the run log yet - `analyze.py streams --append` adds runs")
+    ceiling = cc.easy_ceiling()
+    lines = [f"Easy-run efficiency (runs >= {EASY_RUN_MIN_S // 60} min, <= "
+             f"{CEILING_TIME_TOLERANCE_PCT}% above the ceiling), weekly medians", "",
+             f"{'week of':<12}{'runs':>5}{'HR':>6}{'EF':>7}{'≈pace@ceil':>12}{'W/beat':>8}{'m/km':>6}"]
+    for monday, w in weeks:
+        at_ceiling = fmt_pace(60000 / (w["ef"] * ceiling)) if w["ef"] and ceiling else "-"
+        wpb = f"{w['wpb']:.2f}" if w["wpb"] else "-"
+        gain = f"{w['gain']:.0f}" if w["gain"] is not None else "-"
+        lines.append(f"{monday:<12}{w['n']:>5}{w['hr'] or 0:>6.0f}"
+                     f"{(w['ef'] or 0):>7.2f}{at_ceiling:>12}{wpb:>8}{gain:>6}")
+    easy = [r for r in rows if r.get("sport", "Run") in RUN_TYPES and is_easy(r) and r.get("ef")]
+    payload = {"weeks": [{"week_of": m, **w} for m, w in weeks]}
+    if len(easy) >= 6:
+        k = min(len(easy) // 2, 8)
+        old, new = easy[-2 * k:-k], easy[-k:]
+        a, b = _median([r["ef"] for r in old]), _median([r["ef"] for r in new])
+        payload["change_pct"] = round((b - a) / a * 100, 1)
+        lines += ["", f"Last {k} easy runs against the {k} before: EF {a:.2f} -> {b:.2f} "
+                      f"({(b - a) / a * 100:+.1f}%)"]
+        if ceiling:
+            lines.append(f"  ≈ pace at {ceiling:g} bpm: {fmt_pace(60000 / (a * ceiling))} -> "
+                         f"{fmt_pace(60000 / (b * ceiling))}/km")
+        lines.append("  Within ±2% is noise. Check the m/km column before crediting "
+                     "fitness - flatter routes raise EF too.")
+    longs = [r for r in rows if r.get("decoupling_pct") is not None
+             and (r.get("moving_s") or 0) >= 60 * 60][-6:]
+    if longs:
+        payload["long_runs"] = longs
+        lines += ["", "Runs of an hour or more, decoupling:"]
+        lines += [f"  {r['date']}  {r.get('km', 0):.1f} km  {r['decoupling_pct']:+.1f}% "
+                  f"({r.get('decoupling_basis', 'pace')})" for r in longs]
+    lines += ["", "≈pace@ceil is EF scaled to the ceiling - a trend marker, not a "
+                  "prescription: HR isn't proportional to speed."]
+    emit(payload, lines, args.json)
+
+
+def intensity_weeks(rows, weeks, all_sports=False):
+    """[(monday, {low, mid, high, zone_s, zone_labels, runs})] in seconds."""
+    from collections import defaultdict
+
+    by = defaultdict(lambda: {"low": 0, "mid": 0, "high": 0, "zone_s": None,
+                              "zone_labels": None, "n": 0})
+    for r in rows:
+        if not all_sports and r.get("sport", "Run") not in RUN_TYPES:
+            continue
+        if not r.get("intensity_s") and not r.get("zone_s"):
+            continue
+        w = by[_monday(r["date"])]
+        w["n"] += 1
+        for k in ("low", "mid", "high"):
+            w[k] += (r.get("intensity_s") or {}).get(k, 0)
+        if r.get("zone_s"):
+            if w["zone_s"] is None or len(w["zone_s"]) != len(r["zone_s"]):
+                w["zone_s"] = [0] * len(r["zone_s"])
+                w["zone_labels"] = r.get("zone_labels")
+            w["zone_s"] = [a + b for a, b in zip(w["zone_s"], r["zone_s"])]
+    return [(m, by[m]) for m in sorted(by)[-weeks:]]
+
+
+def cmd_zonedist(args):
+    weeks = intensity_weeks(read_run_log(), args.weeks, args.all_sports)
+    if not weeks:
+        sys.exit("no runs with HR in the run log yet - `analyze.py streams --append` adds runs")
+    what = "all logged sports" if args.all_sports else "runs"
+    lines = [f"Time by intensity, {what} (low <= easy ceiling, high >= threshold)", "",
+             f"{'week of':<12}{'runs':>5}{'hours':>7}{'low':>6}{'mid':>6}{'high':>6}"]
+    tot = {"low": 0, "mid": 0, "high": 0}
+    payload = {"weeks": []}
+    for monday, w in weeks:
+        s = w["low"] + w["mid"] + w["high"]
+        for k in tot:
+            tot[k] += w[k]
+        pct = {k: round(w[k] / s * 100) if s else 0 for k in tot}
+        payload["weeks"].append({"week_of": monday, "runs": w["n"], "hours": round(s / 3600, 1),
+                                 "pct": pct, "zone_s": w["zone_s"],
+                                 "zone_labels": w["zone_labels"]})
+        lines.append(f"{monday:<12}{w['n']:>5}{s / 3600:>7.1f}"
+                     f"{pct['low']:>5}%{pct['mid']:>5}%{pct['high']:>5}%")
+    s = sum(tot.values())
+    if s:
+        pct = {k: round(v / s * 100) for k, v in tot.items()}
+        payload["overall_pct"] = pct
+        lines += ["", f"Overall: {pct['low']}% low, {pct['mid']}% mid, {pct['high']}% high."]
+        if pct["mid"] > 20 and pct["mid"] > pct["high"]:
+            lines.append("  A large middle: easy runs drifting up and hard ones not hard - "
+                         "the grey zone that tires without building much.")
+        elif pct["low"] >= 75:
+            lines.append("  Mostly easy, as the base needs.")
+    lines.append("By HR time: intervals' recoveries count as low, and HR lags short reps.")
+    emit(payload, lines, args.json)
+
+
+# --------------------------------------------------------------------------
+# critical speed from best efforts
+# --------------------------------------------------------------------------
+#
+# Distance covered at maximal effort is close to linear in time between
+# roughly 2 and 25 minutes: d = CS * t + D'. CS is the fastest pace that is
+# sustainable for a long while (close to threshold, ~30-40 min race pace);
+# D' is the finite distance they can run above it. Fitted from best efforts
+# at three or more distances - each of them a genuinely maximal effort at
+# that distance. Splits inside one race are not (the fastest 1k of a 5k is a
+# paced 1k), which is why one activity's efforts alone get a warning.
+
+BEST_EFFORT_M = {
+    "fastest400": 400, "fastesthalfmile": 804.672, "fastest1k": 1000,
+    "fastestmile": 1609.344, "fastest2mile": 3218.688, "fastest5k": 5000,
+    "fastest10k": 10000, "fastest15k": 15000, "fastest10mile": 16093.44,
+    "fastest20k": 20000, "fastesthalfmarathon": 21097.5,
+    "400m": 400, "1/2 mile": 804.672, "1k": 1000, "1 mile": 1609.344,
+    "2 mile": 3218.688, "5k": 5000, "10k": 10000, "15k": 15000,
+    "10 mile": 16093.44, "20k": 20000, "half-marathon": 21097.5,
+}
+CS_MIN_S, CS_MAX_S = 120, 25 * 60
+
+
+def best_efforts(doc):
+    """[(metres, seconds)] from get_activity_performance output (or a list)."""
+    docs = doc if isinstance(doc, list) else [doc]
+    out = []
+    for d in docs:
+        for e in (d.get("best_efforts") or []) if isinstance(d, dict) else []:
+            key = str(e.get("type_value") or e.get("name") or "").lower()
+            metres = BEST_EFFORT_M.get(key) or BEST_EFFORT_M.get(
+                str(e.get("display_text", "")).lower())
+            secs = e.get("value") or e.get("elapsed_time")
+            if metres and secs:
+                out.append((metres, float(secs)))
+    return out, len(docs)
+
+
+def cmd_cs(args):
+    import statistics
+
+    efforts, sources = [], 0
+    if args.performance:
+        efforts, sources = best_efforts(read_json(args.performance))
+    for e in args.effort or []:
+        try:
+            m, t = e.split(":", 1)
+            efforts.append((float(m), float(t)))
+            sources += 1
+        except ValueError:
+            sys.exit(f"--effort takes METRES:SECONDS, got {e!r}")
+    best = {}
+    for m, t in efforts:
+        best[m] = min(t, best.get(m, t))
+    used = sorted((m, t) for m, t in best.items() if CS_MIN_S <= t <= CS_MAX_S)
+    if len(used) < 3:
+        sys.exit(f"need maximal efforts at 3+ distances lasting {CS_MIN_S // 60}-"
+                 f"{CS_MAX_S // 60} min; have {len(used)}")
+    ts = [t for _, t in used]
+    ds = [m for m, _ in used]
+    if max(ts) / min(ts) < 2.5:
+        sys.exit("efforts span too narrow a range of durations - want the longest "
+                 "at least 2.5x the shortest (e.g. 3 min to 20 min)")
+    fit = statistics.linear_regression(ts, ds)
+    cs, dprime = fit.slope, fit.intercept
+    r2 = statistics.correlation(ts, ds) ** 2
+    payload = {"cs_m_s": round(cs, 3), "cs_pace": fmt_pace(1000 / cs),
+               "d_prime_m": round(dprime), "r2": round(r2, 4),
+               "efforts": [{"m": m, "s": t, "pace": fmt_pace(t / m * 1000)} for m, t in used]}
+    lines = ["Efforts used (best per distance):"]
+    lines += [f"  {m / 1000:>7.3f} km  {fmt_time(t):>8}  {fmt_pace(t / m * 1000)}/km" for m, t in used]
+    lines += ["", f"Critical speed {fmt_pace(1000 / cs)}/km ({cs:.2f} m/s), D' {dprime:.0f} m, "
+                  f"R² {r2:.3f}"]
+    vdot = cc.get("physiology.vdot")
+    if vdot:
+        thr = pace_at_intensity(float(vdot), 0.86)
+        payload["vdot_threshold_pace"] = fmt_pace(thr)
+        lines.append(f"  VDOT {vdot:g} threshold pace for comparison: {fmt_pace(thr)}/km "
+                     "(CS usually sits a little faster)")
+    preds = {}
+    for label, dist in [("3 km", 3000), ("5 km", 5000), ("10 km", 10000)]:
+        t = (dist - dprime) / cs
+        if CS_MIN_S <= t <= CS_MAX_S * 1.6:
+            preds[label] = fmt_time(t)
+    if preds:
+        payload["predictions"] = preds
+        lines.append("  Model times: " + ", ".join(f"{k} {v}" for k, v in preds.items()))
+    if r2 < 0.995:
+        lines.append("  R² below 0.995: at least one effort was not maximal - treat with care.")
+    if dprime < 0 or dprime > 600:
+        lines.append(f"  D' of {dprime:.0f} m is implausible (typical 100-400 m): the "
+                     "efforts are not all maximal.")
+    if sources == 1:
+        lines.append("  All efforts came from one activity: splits of a single race are "
+                     "not maximal at each distance. Use bests from separate hard efforts.")
+    emit(payload, lines, args.json)
+
 
 
 # --------------------------------------------------------------------------
@@ -1036,18 +1595,50 @@ def main():
     s.add_argument("--weeks", type=int, default=4, help="block length")
     s.set_defaults(func=cmd_block)
 
-    s = sub.add_parser("chart", help="render the weekly log as a PNG")
-    s.add_argument(
-        "--log",
-        default=str(cc.WEEKLY_LOG),
-    )
-    s.add_argument("--last", type=int, default=12, help="how many weeks to plot")
-    s.add_argument(
-        "--out",
-        default=str(cc.STATE / "weekly_chart.png"),
-        help="output PNG path (printed on success)",
-    )
-    s.set_defaults(func=cmd_chart)
+    s = sub.add_parser("load", help="fitness, fatigue and form from relative effort")
+    s.add_argument("--activities", help="list_activities JSON: a file path, '-' for stdin, "
+                   "or the JSON itself; omit to read the saved history only")
+    s.add_argument("--save", action="store_true",
+                   help="remember these activities in athlete/state/load_log.json")
+    s.add_argument("--until", help="last day to compute, YYYY-MM-DD (default today)")
+    s.add_argument("--days", type=int, default=90, help="days of series in --json")
+    s.set_defaults(func=cmd_load)
+
+    s = sub.add_parser("streams", help="one activity's streams: decoupling, efficiency, zones")
+    s.add_argument("--streams", required=True,
+                   help="get_activity_streams JSON: a file path, '-' for stdin, or the JSON")
+    s.add_argument("--ceiling", type=float, help="default: physiology.easy_ceiling")
+    s.add_argument("--skip-warmup", type=int, default=600,
+                   help="seconds of moving time left out of decoupling (default 600)")
+    s.add_argument("--append", action="store_true",
+                   help="record it in athlete/state/run_log.jsonl (needs --id and --date)")
+    s.add_argument("--id", help="Strava activity id")
+    s.add_argument("--date", help="the activity's start_local")
+    s.add_argument("--sport", default="Run", help="sport_type (default Run)")
+    s.set_defaults(func=cmd_streams)
+
+    s = sub.add_parser("runlog", help="read the run log, or list runs missing from it")
+    s.add_argument("--last", type=int, default=10)
+    s.add_argument("--missing", metavar="ACTIVITIES",
+                   help="list_activities JSON: print the runs not yet in the run log")
+    s.set_defaults(func=cmd_runlog)
+
+    s = sub.add_parser("efficiency", help="easy-run efficiency trend and long-run decoupling")
+    s.add_argument("--weeks", type=int, default=12)
+    s.set_defaults(func=cmd_efficiency)
+
+    s = sub.add_parser("zonedist", help="weekly time by intensity (low / mid / high)")
+    s.add_argument("--weeks", type=int, default=8)
+    s.add_argument("--all-sports", action="store_true",
+                   help="include logged non-run activities (zones are running zones)")
+    s.set_defaults(func=cmd_zonedist)
+
+    s = sub.add_parser("cs", help="critical speed and D' from best efforts")
+    s.add_argument("--performance",
+                   help="get_activity_performance JSON (one, or a list of several)")
+    s.add_argument("--effort", action="append", metavar="METRES:SECONDS",
+                   help="a maximal effort, repeatable, e.g. --effort 5000:1500")
+    s.set_defaults(func=cmd_cs)
 
     args = p.parse_args()
     args.func(args)

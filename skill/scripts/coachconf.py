@@ -40,6 +40,8 @@ SCRIPTS = SKILL_DIR / "scripts"
 
 CHECKIN_LOG = STATE / "checkin_log.jsonl"
 WEEKLY_LOG = STATE / "weekly_log.jsonl"
+RUN_LOG = STATE / "run_log.jsonl"
+LOAD_LOG = STATE / "load_log.json"
 NIGGLES = STATE / "niggles.jsonl"
 HEALTH_DIR = STATE / "health" / "daily"
 
