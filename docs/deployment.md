@@ -458,6 +458,7 @@ own notes or tools next to the coach, or tweak the engine yourself:
 git clone <public engine> ~/claude-running-coach && cd ~/claude-running-coach
 git remote rename origin upstream
 git remote add origin git@github.com:<you>/<private-repo>.git
+git config pull.rebase false     # engine updates are merged, never rebased
 # in .gitignore, uncomment:  !/athlete/
 git add -A && git commit -m "track athlete data" && git push -u origin main
 ```
