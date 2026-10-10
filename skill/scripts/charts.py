@@ -296,19 +296,30 @@ def cmd_load(args):
     title(ax1, "Training load", f"fitness {ctl[-1]:.0f}, fatigue {atl[-1]:.0f}, {now} "
           f"- after {until.isoformat()}")
 
-    lo, hi = -50, 40
+    # Fit the data (within ±100%) so nothing is clipped into a flat line.
+    shown = [f for f in form if f is not None] or [0]
+    lo = max(-100, min(-50, min(shown) - 8))
+    hi = min(100, max(40, max(shown) + 8))
     ax2.axhspan(-30, -10, color=C["band"], zorder=1)
     ax2.axhline(0, color=C["grid"], linewidth=1, zorder=2)
-    ax2.plot(days, [None if f is None else max(lo, min(hi, f)) for f in form],
+    ax2.plot(days, [None if f is None else max(-100, min(100, f)) for f in form],
              color=C["ink2"], linewidth=1.5, zorder=3)
     # Band names in the right margin, where the line can't run over them.
     margin = matplotlib.transforms.blended_transform_factory(ax2.transAxes, ax2.transData)
-    for y, lab in ((-20, "productive"), (-42, "high risk"), (15, "fresh")):
+    for y, lab in ((-20, "productive"), ((lo - 30) / 2, "high risk"), (15, "fresh")):
         ax2.text(1.01, y, lab, transform=margin, va="center", fontsize=7, color=C["ink2"])
     ax2.axhline(-30, color=C["grid"], linewidth=0.8, linestyle=":", zorder=2)
+    # Big blocks on low fitness can go far past ±100%: say where it's cut.
+    for i, f in enumerate(form):
+        if f is not None and abs(f) > 100 and (i == 0 or form[i - 1] is None
+                                                or abs(form[i - 1]) <= 100):
+            ax2.annotate(f"{'<' if f < 0 else '>'} {'-' if f < 0 else '+'}100%", (days[i], 100 if f > 0 else -100),
+                         textcoords="offset points", xytext=(4, 4 if f < 0 else -10),
+                         fontsize=7, color=C["ink2"])
     ax2.set_ylim(lo, hi)
-    ax2.set_yticks([-30, -10, 0, 25])
-    ax2.set_yticklabels(["-30%", "-10%", "0", "+25%"])
+    ticks = [t for t in (-100, -30, 0, 25, 50, 100) if lo <= t <= hi]
+    ax2.set_yticks(ticks)
+    ax2.set_yticklabels([f"{t:+d}%" if t else "0" for t in ticks])
     ylabel(ax2, "form\n(% of fitness)")
     if seed_end > days[0]:
         end = min(seed_end, days[-1])

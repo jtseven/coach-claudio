@@ -879,6 +879,14 @@ def cmd_load(args):
     week_ago = series[-8] if len(series) >= 8 else series[0]
     ramp = ctl - week_ago[2]
     span = len(series)
+    # Bands describe a state, not a day: one hard day always dips form, and
+    # against a low fitness it dips a long way. Count how long it has held.
+    band = form_band(form_pct)
+    streak = 0
+    for _, _, c, a in reversed(series):
+        if not c or form_band((c - a) / c * 100) != band:
+            break
+        streak += 1
     no_hr = sum(1 for r in store.values() if r.get("load") is None)
     last_activity = max(r["date"] for r in store.values())
 
@@ -888,7 +896,8 @@ def cmd_load(args):
         "fatigue_atl": round(atl, 1),
         "form_tsb": round(tsb, 1),
         "form_pct": round(form_pct),
-        "form_band": None if span < CTL_DAYS else form_band(form_pct),
+        "form_band": None if span < CTL_DAYS else band,
+        "form_band_days": streak,
         "ramp_7d": round(ramp, 1),
         "ramp_7d_pct": round(ramp / week_ago[2] * 100) if week_ago[2] else None,
         "history_days": span,
@@ -906,13 +915,16 @@ def cmd_load(args):
         f"  fatigue  (7 d)  {atl:6.1f}",
         f"  form            {tsb:+6.1f}   = {form_pct:+.0f}% of fitness: "
         + ("not judged until the history is long enough" if span < CTL_DAYS
-           else form_band(form_pct)),
+           else f"{band} ({streak} day{'s' if streak != 1 else ''})"),
         "",
         "Last 7 days: " + " · ".join(f"{d.strftime('%a')} {l:.0f}" for d, l, _, _ in series[-7:]),
     ]
     if span < CTL_DAYS:
         lines.append(f"Only {span} days of history: fitness is understated until about "
                      f"{CTL_DAYS} days are loaded - pass 90+ days of activities once with --save.")
+    if span >= CTL_DAYS and streak <= 2 and form_pct < -10:
+        lines.append("A dip of a day or two is what any hard day does to form - "
+                     "it matters when it lasts.")
     if no_hr:
         lines.append(f"{no_hr} activities had no relative effort (no HR) and count as 0.")
     lines.append(f"Latest activity in the history: {last_activity}"

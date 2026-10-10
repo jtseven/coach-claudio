@@ -392,7 +392,10 @@ average, **fatigue** its 7-day average, **form** the gap — expressed as a
 percentage of fitness so the bands work on Strava's scale:
 
 - **below −30%** — high risk: fatigue well beyond what fitness absorbs.
-  Combined with a niggle or poor sleep, that's the week to cut.
+  Combined with a niggle or poor sleep, that's the week to cut. **Count the
+  days** (the output does): any hard day dips form for a day or two — a
+  parkrun on low fitness can hit −40% — and that's not a risk. Several days
+  down there is.
 - **−30 to −10%** — productive: a training block carrying load. Normal.
 - **−10 to +5%** — neutral.
 - **+5 to +25%** — fresh: a down week, or race-ready after a taper.
