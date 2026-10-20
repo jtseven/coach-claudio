@@ -293,7 +293,7 @@ def cmd_load(args):
     ax1.set_ylim(0, top * 1.25)
     ylabel(ax1, "load per day\n(Strava relative effort)")
     now = f"form {form[-1]:+.0f}% of fitness" if form[-1] is not None else "form not judged yet"
-    title(ax1, "Training load", f"fitness {ctl[-1]:.0f}, fatigue {atl[-1]:.0f}, {now} "
+    title(ax1, "Observed training load (coverage may be incomplete)", f"CTL {ctl[-1]:.0f}, ATL {atl[-1]:.0f}, {now} "
           f"- after {until.isoformat()}")
 
     # Fit the data (within ±100%) so nothing is clipped into a flat line.
@@ -306,7 +306,7 @@ def cmd_load(args):
              color=C["ink2"], linewidth=1.5, zorder=3)
     # Band names in the right margin, where the line can't run over them.
     margin = matplotlib.transforms.blended_transform_factory(ax2.transAxes, ax2.transData)
-    for y, lab in ((-20, "productive"), ((lo - 30) / 2, "high risk"), (15, "fresh")):
+    for y, lab in ((-20, "negative balance"), ((lo - 30) / 2, "large negative"), (15, "positive balance")):
         ax2.text(1.01, y, lab, transform=margin, va="center", fontsize=7, color=C["ink2"])
     ax2.axhline(-30, color=C["grid"], linewidth=0.8, linestyle=":", zorder=2)
     # Big blocks on low fitness can go far past ±100%: say where it's cut.
@@ -320,7 +320,7 @@ def cmd_load(args):
     ticks = [t for t in (-100, -30, 0, 25, 50, 100) if lo <= t <= hi]
     ax2.set_yticks(ticks)
     ax2.set_yticklabels([f"{t:+d}%" if t else "0" for t in ticks])
-    ylabel(ax2, "form\n(% of fitness)")
+    ylabel(ax2, "model balance\n(not injury risk)")
     if seed_end > days[0]:
         end = min(seed_end, days[-1])
         for ax in (ax1, ax2):
@@ -377,7 +377,7 @@ def cmd_aerobic(args):
         ax1.text(0.5, 0.5, "no HR zones configured", transform=ax1.transAxes,
                  ha="center", fontsize=8, color=C["ink2"])
     ylabel(ax1, "running hours\nby HR zone")
-    title(ax1, "Aerobic base", "label: share of running time at or under the easy ceiling")
+    title(ax1, "Observed aerobic trends", "Classified HR time only; missing runs/sensors and terrain limit inference")
 
     pts = [(x, eff[w]["ef"]) for x, w in zip(xs, weeks) if w in eff and eff[w]["ef"]]
     ceiling = cc.easy_ceiling()

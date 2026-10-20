@@ -173,9 +173,11 @@ week. Losing it means fitness reads low until it is seeded again.
 **`niggles.jsonl`** — pain and niggle reports via `coachlog.py niggle`.
 Latest line per `area` wins; a resolved line closes one.
 
-**`postrun_seen.txt`** — the post-run watcher's memory of handled activity
-ids. Deleting it is safe: the next poll re-initialises without triggering
-anything.
+**`postrun_seen.txt`** — a compatibility snapshot of discovered activity IDs,
+not proof of delivery. **`delivery.sqlite3`** holds the durable per-activity queue,
+saved messages, and confirmed-chunk checkpoints. Preserve it across updates;
+deleting the seen file alone does not reset the queue. See
+[delivery reliability](delivery-reliability.md) for migration and retry behavior.
 
 **A test run writes to these exactly like a real one**, and the next real
 check-in then skips whatever the test "covered". Test with
@@ -292,16 +294,18 @@ Two more ways the bot goes deaf, both handled by `ensure_channel.sh`:
 feedback arrive minutes after a workout instead of at the evening review. Two
 stages, split by cost:
 
-1. **Detect** — a Haiku `-p` run whose only job is to list the last three
-   activities as JSON, under `--strict-mcp-config` with an inline Strava-only
-   server (which is what keeps it off the Telegram poller). It reuses the
-   stored login of the user-scope `strava-mcp` server.
-2. **React** — only for a new activity: `check_in.sh postrun <id> <type>`,
-   the full coaching pipeline. The coach replies `SKIP` if the activity was
-   already discussed.
+1. **Detect** — a Haiku `-p` run lists the latest 100 activities as JSON under
+   `--strict-mcp-config` with an inline Strava-only server. It reuses the stored
+   login of the user-scope `strava-mcp` server without loading Telegram.
+2. **Queue and react** — every eligible new activity is queued durably and gets
+   a reaction. Failed sends retain their saved text and retry; coverage is
+   committed only after Telegram confirms all chunks. Already-covered activities
+   and explicit `SKIP` responses do not send another reaction.
 
-Commutes (`activities.commute_types`) and anything older than 12 hours never
-trigger it. Roughly 30 polls a day at a few thousand tokens each.
+Commutes, invalid/future timestamps and activities at least 12 hours old are
+excluded at discovery. Pending work remains retryable after aging out. Polls also
+retry saved morning/evening messages. See [delivery reliability](delivery-reliability.md)
+for first-run seeding, legacy seen-file migration and the ambiguous-send window.
 
 ## Apple Health via Health Auto Export
 
@@ -315,8 +319,11 @@ The receiving side:
 - `health_server.py` — a standard-library HTTP server on port 5556
   (`HEALTH_PORT`), kept alive by `ensure_health_server.sh` from cron. It
   stores each day's metrics in `athlete/state/health/daily/YYYY-MM-DD.json`.
-  Re-exports overwrite per metric (idempotent), except sleep, which is merged
-  because the app sometimes re-sends a night as a shorter fragment.
+  Hourly/raw snapshots merge by timestamp; explicit daily snapshots replace the
+  metric, and sleep spans merge. Ambiguous aggregation changes are rejected
+  rather than silently mixing representations. It refuses startup without a
+  nonempty API key and defaults to loopback (`HEALTH_BIND=127.0.0.1`). See
+  [health ingestion](health-ingestion.md) before upgrading or changing export modes.
 - `health.py` — what the coach reads through. Never sum or average a metric
   by hand: `value()` knows that steps, energy and distance accumulate while
   rates average. Averaging what should be summed once reported a day's active
@@ -341,26 +348,27 @@ The receiving side:
 
 **Reaching the machine from the phone** — pick one:
 
-- **Home Wi-Fi only**: `http://<machine-ip>:5556/health`. Simplest; exports
-  just wait until you're home.
-- **Tailscale** (recommended): install it on the machine and the phone, then
-  use `http://<machine-tailscale-name>:5556/health`. Works from anywhere,
-  exposes nothing to the internet.
+- **Home Wi-Fi only**: explicitly set `HEALTH_BIND=<machine-lan-ip>` in the
+  watchdog environment, then use `http://<machine-ip>:5556/health`.
+- **Tailscale**: bind explicitly to the machine's Tailscale IPv4 address using
+  `HEALTH_BIND`, then use `http://<machine-tailscale-name>:5556/health`. Keep
+  the API key required. The default loopback bind is not remotely reachable.
 - **Reverse proxy on a domain** (Caddy, nginx): proxy `/healthexport*` to
   `localhost:5556` over HTTPS — the server answers on `/healthexport` too.
   Avoid Cloudflare's proxy for this host: it caps request bodies at 100 MB
   and a first export with months of heart rate exceeds that.
 
-To test the server without an iPhone:
+To test ingestion without a phone or contaminating live health history:
 
 ```bash
-source .env
-curl -s -X POST http://localhost:5556/health -H "x-api-key: $HEALTH_API_KEY" \
-  -d '{"data":{"metrics":[{"name":"resting_heart_rate","units":"bpm","data":[{"date":"2026-08-14 07:00:00 +0200","qty":48}]}]}}'
+python3 -m unittest discover -s tests -p test_health_ingestion.py -v
 ```
 
-**Delete the test file from `athlete/state/health/daily/` afterwards** —
-synthetic values poison the 28-day baseline.
+These tests start an ephemeral loopback server with synthetic credentials and a
+disposable data directory. Do not post invented physiological values to the live
+receiver: synthetic days can poison recovery baselines. For a deployment check,
+use `GET /ping` and an authenticated empty export (`{"data":{"metrics":[],"workouts":[]}}`),
+which exercises authentication without adding health values.
 
 Health data stays on the machine: `athlete/.gitignore` keeps it out of the
 backup. Losing it costs baseline depth, not function.

@@ -31,9 +31,12 @@ explains why these are noisy daily aggregates and what is actually
 actionable. Do not recite form numbers that look normal.
 {{/if}}
 
-Write in {language}. {postrun_words} words, no tables, no headers. Then log
-it with `coachlog.py add --mode postrun --ids {activity_id}`, as described in
-the skill.
+Write in {language}. {postrun_words} words, no tables, no headers. Stage
+its delivery note with `coachlog.py add --mode postrun --ids {activity_id}`,
+as described in the skill. Scheduled `add` calls are staged automatically;
+only confirmed Telegram delivery commits them as covered. Do not write the
+check-in log directly or unset the delivery transaction environment. SKIP
+stages nothing and does not claim that a message was delivered.
 
 Reply with ONLY the message to send (or SKIP), nothing else. Your entire
 response is sent verbatim.

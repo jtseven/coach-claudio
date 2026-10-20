@@ -168,10 +168,14 @@ and when to recheck (the end of the first phase).
 **`athlete/plan.md`** — draft the season, show it to them in short lines, and
 adjust before writing. Principles:
 
-- **Start from what they actually run**, not what they'd like to: W1 is about
-  their recent 8-week average (not their peak), and nothing grows more than
-  ~10% a week on the *actual* previous week. Down week every 3rd or 4th week
-  at ~70–75% of the week before.
+- **Start from recent tolerated normal running**, not a peak or an average
+  that quietly excludes missing/zero weeks. Confirm coverage and ask what
+  reductions meant: scheduled recovery, travel, illness or pain. Use the
+  `analyze.py progression` policy described in `training-plan.md`; don't
+  promise a +10% rule prevents injury. Without at least three recent complete,
+  explicitly tolerated normal weeks, don't automatically increase load or
+  infer a return baseline. Down weeks can be planned every 3rd or 4th week,
+  but returning from one is not the same as returning after illness.
 - **`plan_start`** is the coming Monday (or this Monday if it's early in the
   week and they're keen). `plan_weeks` runs to race week inclusive.
 - **Phases**, roughly: base (a third of the plan — easy volume only, strides,
@@ -183,7 +187,7 @@ adjust before writing. Principles:
   allows; for a half, 18–22 km.
 - **Peak volume** follows from their history and time, not from a template:
   a first marathon off 15 km a week is a different plan from a fifth off 50.
-- **Not enough time?** If +10% a week can't reach a sensible peak before the
+- **Not enough time?** If conservative reviewed progression can't reach a sensible peak before the
   taper, say so with the numbers and offer the options: a later race, a
   different distance, or a "finish healthy" goal instead of a time.
 - **Gym**: two short sessions a week if they lift (lower + core, upper +

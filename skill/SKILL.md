@@ -167,8 +167,13 @@ python3 <skill>/scripts/analyze.py trend --last 8
 ```
 
 Read it whenever they ask how it's going or whether to push, and always
-before prescribing more volume — it prints the +10% ceiling off their
-*actual* last week, which is the number that keeps them uninjured.
+before prescribing more volume. `analyze.py progression` validates a proposal
+against the same conservative policy used by `trend`, `block` and `week`.
+It distinguishes building from planned down-week, travel and illness/pain
+returns. Returns need an explicit reason and evidence; an illness/pain return
+also needs an explicitly reviewed cap. Missing history is not a zero week.
+The 10% heuristic is not a scientific guarantee of injury prevention.
+See `references/training-plan.md` and `docs/progression-quality.md`.
 
 **The run log and the load history — what each session did to them.**
 `analyze.py streams --append` records a run's efficiency, decoupling and
@@ -248,14 +253,15 @@ How to use it:
 - **Morning brief** starts with `summary`, and says something only when the
   `NOTABLE:` line points at a real decision — short sleep before a hard or
   long session, HRV clearly suppressed over the night, resting HR up.
-  **Illness is a pattern, not a metric**: respiratory rate *and* wrist
-  temperature up together, ideally with resting HR, is worth acting on before
-  they feel ill. One of them drifting alone is not a message. Single hourly
-  HRV readings are noise; never quote one.
+  Wearable changes are context, not an illness detector: respiratory rate,
+  temperature and resting HR can shift for many reasons. Ask about symptoms
+  when a sustained pattern affects a training decision; do not predict an
+  infection. Single hourly HRV readings are noise; never quote one.
 - **Run analysis** can pull `run` for cadence and form. Read section 9 of
   `references/analysis-playbook.md` first; only cadence has an action.
-- **Fatigue questions** settle with evidence: HRV and resting HR over several
-  nights rather than speculation.
+- **Fatigue questions** use several nights of HRV/resting HR as context, not
+  a diagnosis. Ask about symptoms and perceived recovery; wearable data cannot
+  distinguish illness, stress and training fatigue reliably on its own.
 - **Long-run trends** — VO2max, resting HR, weight — are encouragement that
   lands. At the weekly close-out, when they've genuinely moved.
 - **`MISSING (export gap, not a finding)`** is a separate line on purpose:
@@ -375,9 +381,9 @@ anything genuinely interesting. For runs read
 training, strength, or fun — see `references/cross-training.md`.
 
 **"Should I train today?" / "feeling rough"** — Ask what's driving it if you
-don't know, then decide and say so clearly. `analyze.py load` says whether
-the training load explains it (form below −30% does). Ambiguity is useless to someone
-standing in their kit. Err toward backing off: one missed easy run costs
+don't know, then decide and say so clearly. `analyze.py load` provides observed-load context, not an explanation or clearance.
+Check its missing-effort, date-span and stale-history warnings before using it.
+Err toward backing off: one missed easy run costs
 nothing across a season, one injury costs the race.
 
 **Pain, illness, or unusual fatigue** — Back the plan off. Never encourage

@@ -37,8 +37,11 @@ references/training-plan.md before writing your brief, and mention briefly
 that you did.
 
 Run `python3 {scripts}/coachlog.py recent` first and do not re-summarise any
-activity already covered there. After you have written the message, log it
-with `coachlog.py add --mode morning`, as described in the skill.
+activity already covered there. Stage the finished message's delivery note
+with `coachlog.py add --mode morning`, as described in the skill. Scheduled
+`add` calls are staged automatically; only confirmed Telegram delivery commits
+them as covered. Do not write the check-in log directly or unset the delivery
+transaction environment.
 
 Write in {language}. {morning_words} words, one main point. No markdown
 tables, no headers - this is read on a phone.

@@ -134,12 +134,12 @@ efficiency, time above the ceiling and time per zone. `--append` records the
 run in the run log for the trends in section 11; a run already there is
 skipped.
 
-- **Under 5%** — coupled: aerobically solid at this effort for this long.
-  On a long run that is the result to name.
-- **5–10%** — the effort is at the edge of their aerobic base for that
-  duration — or heat, dehydration, no fuel. Check section 6 first.
-- **Over 10%** — the effort outran the base. On a long run the fix is a
-  slower start, fuel, or a shorter run, not more willpower.
+- **Under 5%** — relatively little measured drift in this file, not proof
+  of aerobic readiness or durability.
+- **5–10%** — some measured drift. Check terrain, heat, fuelling, pacing
+  and sensor quality before interpreting it.
+- **Over 10%** — larger measured drift, not a diagnosis of a deficient
+  aerobic base. Consider an easier/shorter run if symptoms or effort warrant it.
 - **Negative** — HR fell against output: an easier or downhill second half,
   or a sensor artifact.
 
@@ -262,10 +262,9 @@ short night, but midday heat explains it just as well and I can't separate them"
 is more useful than a confident guess.
 
 But check first, because tiebreakers are often available: weather settles
-heat, and with Apple Health on, overnight resting HR, HRV and sleep settle
-fatigue (section 8). Between them, most "I can't separate these" situations
-are separable — say the honest uncertain thing only after you've looked, not
-instead of looking.
+heat; with Apple Health on, overnight resting HR, HRV and sleep add context
+(section 8), but they do not reliably settle causality. Say what remains
+unknown after checking rather than presenting a wearable pattern as a diagnosis.
 
 ## 7. Weekly rollups
 
@@ -299,17 +298,18 @@ the point** — read them, and stay quiet about the rest on a normal day.
 
 What each marker is actually good for:
 
-- **HRV and resting HR** — the fatigue pair. HRV suppressed to ≤80% of baseline,
-  or resting HR ≥5 bpm above it, means autonomic load: hard training, poor
-  sleep, alcohol, or oncoming illness. Either one alone is a nudge to keep the
-  day easy; both together on a quality day is a real reason to move the session.
-- **Sleep** — under 6 h is flagged. Deep and REM matter as well as the total; a
-  7-hour night with 20 minutes of deep sleep is not a recovered night. Do not
-  moralise about it, just factor it into what you prescribe.
-- **Respiratory rate and wrist temperature** — the illness pair, and the reason
-  they're worth watching: both rise a day or two *before* they feel ill. Together
-  with a resting HR jump, that's the pattern that justifies saying "this looks
-  like something coming on, keep today genuinely easy" before they notice.
+- **HRV and resting HR** — sustained deviations can prompt a recovery/symptom
+  check. The ≤80%-HRV and +5-bpm resting-HR flags are operational heuristics,
+  not validated diagnostic boundaries. Training, sleep, stress, alcohol,
+  environment and measurement noise can all contribute. Use symptoms and
+  perceived recovery when deciding whether to move a quality session.
+- **Sleep** — under 6 h is flagged as a practical prompt to ask about recovery,
+  not a clinical threshold. Consumer-watch deep/REM estimates are uncertain:
+  20 minutes of recorded deep sleep cannot establish that someone is unrecovered.
+  Use duration trends, symptoms and perceived sleep quality; never moralise.
+- **Respiratory rate and wrist temperature** — changes can have many causes,
+  including illness, environment and measurement error. Ask about symptoms
+  and consider easier training; do not predict an infection from watch data.
 - **Blood oxygen** — background; only worth mentioning if it drops materially.
 - **Cardio recovery** (1-minute HR drop after effort) — logged on training days,
   and one of the better fitness trends available. A rising number over months is
@@ -354,14 +354,13 @@ presenting them as it. Sanity-check the speed too: a day showing 118 spm at
 
 What's worth acting on, in order:
 
-- **Cadence** (derived: speed ÷ stride length) — the one form metric with a clear
-  action attached. Around 160 spm or below is on the low side for most runners;
-  low cadence with long stride is the overstriding pattern that loads the knee
-  and shin, which matters most for an athlete whose plan hinges on adding
-  volume without injury. The fix is boring and effective:
-  same pace, slightly shorter steps, aiming for ~5% higher over weeks. Raise it
-  when it's relevant — a niggle in the knee or shin, or a volume step-up — not as
-  a recurring lecture.
+- **Cadence** (derived: speed ÷ stride length) — depends on speed, terrain,
+  body dimensions and how the watch defines stride length. There is no universal
+  160/180-spm target. A low daily average cannot diagnose overstriding, knee
+  loading or injury risk. Compare similar runs; if pain or a gait concern
+  persists, suggest assessment rather than prescribing a cadence fix from
+  this number alone. Small technique experiments should be optional and
+  symptom-led, not a requirement for progressing volume.
 - **Ground contact time** — falls as running economy improves.
   Slow-moving; a monthly trend, not a daily talking point.
 - **Vertical oscillation** — bounce. Lower is generally more economical,
@@ -386,41 +385,34 @@ python3 <skill>/scripts/analyze.py load                                  # from 
 python3 <skill>/scripts/analyze.py load --activities <json> --save       # add activities first
 ```
 
-Each day's load is Strava's `relative_effort` (HR-based, in
-`list_activities`, every sport but commutes). **Fitness** is its 42-day
-average, **fatigue** its 7-day average, **form** the gap — expressed as a
-percentage of fitness so the bands work on Strava's scale:
+Each day's **observed load** sums known Strava `relative_effort`, all sports
+except configured commutes. CTL (42-day) and ATL (7-day) are exponentially
+weighted model estimates, conventionally called fitness/fatigue; TSB is their
+difference. They are not direct physiological measurements or injury predictions.
+Negative balance means recent recorded load exceeds longer-term recorded load;
+positive balance does not establish race readiness or loss of fitness.
 
-- **below −30%** — high risk: fatigue well beyond what fitness absorbs.
-  Combined with a niggle or poor sleep, that's the week to cut. **Count the
-  days** (the output does): any hard day dips form for a day or two — a
-  parkrun on low fitness can hit −40% — and that's not a risk. Several days
-  down there is.
-- **−30 to −10%** — productive: a training block carrying load. Normal.
-- **−10 to +5%** — neutral.
-- **+5 to +25%** — fresh: a down week, or race-ready after a taper.
-- **above +25%** — fitness starting to decay; fine after illness or a
-  holiday, a problem if it lasts.
+Check `quality`: activity counts with/without effort, date span and days since
+the latest activity. Unknown relative effort is **not a known zero**. The
+model computes the observed component only; days without records are assumed
+empty for arithmetic, not verified rest days. Missing effort, fewer than 42
+days or a history older than 7 days suppress the form band. Even otherwise,
+upstream activity completeness is unknown and confidence is only limited.
 
-Use it as evidence, not a verdict:
-
-- **"Should I train today?" / "legs dead"** — form below −30% backs up
-  backing off; form near neutral with dead legs points at sleep, food or
-  illness rather than load.
-- **Taper and race week** — form should climb into the fresh band by race
-  day. If it's still negative a week out, the taper started too late.
-- **Ramp** — fitness gained per week. A ramp far above the weeks before is
-  the load-side version of the +10% rule, and it counts the bike and the
-  gym that running km don't.
-
-It reads only what was saved: if the latest activity in the history is
-older than the athlete's last session, add the recent activities first.
-With under 42 days of history, form isn't judged — the script says so.
-Relative effort needs HR; activities without it count as zero.
+Do not use a −30% band, ramp, or any fixed number to diagnose overtraining,
+explain symptoms, promise injury prevention, or clear someone to train.
+Ask how they feel and check symptoms and session context. An unusually large
+observed ramp can prompt review, not an automatic prescription. `progression`
+is the separate weekly-volume validator; load scores do not override it.
 
 ## 11. The aerobic trend — efficiency and intensity distribution
 
-The run log (section 3, `--append`) holds every analysed run. Two readings
+The run log (section 3, `--append`) holds analysed runs, not necessarily every
+completed run. First compare `runlog --missing <complete-activities.json>`:
+its counts and date span cover only the supplied list, never prove upstream
+completeness. Efficiency and zones expose logged/usable counts, missingness,
+staleness and low/limited confidence; do not hide these when they change a
+decision. No data backfill is implied. Two readings
 come out of it:
 
 ```bash
@@ -434,7 +426,8 @@ the clearest sign in their own runs that the base is building, and it
 translates into the sentence athletes understand: "≈ pace at the ceiling",
 the pace their easy heart rate buys. Rules:
 
-- Changes under ~2% are noise.
+- Small changes may be noise; 2% is a rough display heuristic, not a validated
+  significance boundary. Few similar runs cannot establish improvement.
 - **Terrain moves it.** The m/km column is there for a reason: a week of flat
   routes raises EF without any fitness. Compare like with like.
 - **Heat lowers it** by several percent in summer. A dip in a heatwave isn't

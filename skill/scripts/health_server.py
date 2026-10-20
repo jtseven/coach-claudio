@@ -8,12 +8,12 @@ metric's datapoints into one JSON file per calendar day:
     <coach home>/athlete/state/health/daily/YYYY-MM-DD.json
     {"metrics": {"sleep_analysis": [...], "resting_heart_rate": [...]}, ...}
 
-Re-exports overwrite that day's entry for the metric rather than appending,
-so the app re-sending "today so far" every few hours is idempotent and the
-newest export wins. scripts/health.py reads these files back; nothing else
-does. Workouts in the payload are stored under a "workouts" key the same
-way, but Strava stays the source of truth for training - they're kept only
-because deleting data someone chose to export would be surprising.
+Re-exports merge timestamp-keyed buckets; explicit daily aggregation replaces
+that metric's day. Sleep keeps the fullest overlapping span. See
+../../docs/health-ingestion.md for aggregation ambiguity and safe upgrades.
+scripts/health.py reads the unchanged metric-list format; additive ingestion
+metadata is ignored by readers. Workouts retain day-level replacement semantics.
+Strava stays the source of truth for training.
 
 Auth: requests must carry the HEALTH_API_KEY value (from the coach's .env)
 in an "x-api-key" header (configure it under "Headers" in the app's API
@@ -22,11 +22,16 @@ Export settings). Health data is worth an auth header even on a home LAN.
 Runs as a daemon via ensure_health_server.sh from cron. If the port is
 already bound it exits 0 immediately - that is the watchdog no-op path.
 
-Standard library only, single-threaded on purpose: one iPhone posting every
-few hours does not need more, and less machinery means less to break.
+Standard library only. Threaded HTTP supports proxy keep-alive; one lock
+serializes validated read-modify-write batches. Loopback bind is the default;
+HEALTH_BIND explicitly enables a LAN interface. No key means no startup.
 """
 
+import hmac
 import json
+import math
+import tempfile
+from pathlib import Path
 import os
 import socket
 import sys
@@ -78,7 +83,7 @@ def _sleep_span(dp):
     for value in (dp.get("sleepStart") or dp.get("inBedStart"),
                   dp.get("sleepEnd") or dp.get("inBedEnd")):
         try:
-            out.append(datetime.strptime(str(value).strip()[:19], "%Y-%m-%d %H:%M:%S"))
+            out.append(_timestamp(str(value).strip()).replace(tzinfo=None))
         except (ValueError, TypeError):
             return None
     start, end = out
@@ -95,7 +100,8 @@ def merge_spans(existing, incoming):
     for dp in list(existing or []) + list(incoming or []):
         span = _sleep_span(dp)
         if span is None:
-            kept.append(dp)
+            if dp not in kept:
+                kept.append(dp)
             continue
         for i, other in enumerate(kept):
             other_span = _sleep_span(other)
@@ -130,18 +136,30 @@ ACCUMULATING_METRICS = {
 }
 
 
+def _timestamp(value):
+    # HAE separates the UTC offset with a space, unlike ISO 8601.
+    head, separator, tail = value.rpartition(" ")
+    if separator and tail.startswith(("+", "-")) and len(tail) in (5, 6):
+        value = head + tail
+    return datetime.fromisoformat(value)
+
+
 def _on_the_hour(dp):
-    return str(dp.get("date", ""))[13:19] == ":00:00"
+    stamp = dp.get("date", "")
+    if len(stamp) < 19:
+        return False
+    dt = _timestamp(stamp)
+    return dt.minute == dt.second == dt.microsecond == 0
 
 
-def fold_hourly(dps):
+def fold_hourly(dps, *, force=False):
     """Raw datapoints of an accumulating metric -> one summed point per hour.
 
     Already-hourly input (every timestamp on the hour) passes through
     untouched. The hour key keeps the original UTC offset, so the result
     reads exactly like an app-aggregated hourly bucket.
     """
-    if all(_on_the_hour(dp) for dp in dps):
+    if not force and all(_on_the_hour(dp) for dp in dps):
         return dps
     hours = {}
     for dp in dps:
@@ -149,18 +167,103 @@ def fold_hourly(dps):
         stamp = str(dp.get("date", ""))
         if not isinstance(qty, (int, float)) or len(stamp) < 19:
             continue
-        key = stamp[:13] + ":00:00" + stamp[19:]
+        dt = _timestamp(stamp)
+        key = dt.strftime("%Y-%m-%d %H:00:00")
+        if dt.tzinfo is not None:
+            key += " " + dt.strftime("%z")
         if key not in hours:
             hours[key] = {"date": key, "qty": 0.0, "source": "",
                           "units": dp.get("units")}
+        if hours[key]["units"] != dp.get("units"):
+            raise ValueError("cannot fold mixed units in an hour")
         hours[key]["qty"] += qty
     return [hours[k] for k in sorted(hours)]
 
 
-def store(payload):
-    """Merge one export into the per-day files. Returns (days, metrics)."""
+def _validate_stamp(value):
+    """Accept HAE wall-clock/offset and ISO timestamps, or a calendar date."""
+    if not isinstance(value, str) or len(value) < 10:
+        raise ValueError("missing timestamp")
+    day = value[:10]
+    try:
+        parsed = datetime.strptime(day, "%Y-%m-%d")
+        if parsed.strftime("%Y-%m-%d") != day:
+            raise ValueError("noncanonical date")
+        if len(value) > 10:
+            _timestamp(value)
+    except ValueError as exc:
+        raise ValueError("invalid calendar timestamp") from exc
+    return day
+
+
+def _validate_payload(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be an object")
     data = payload.get("data", payload)
-    per_day = {}  # date -> {"metrics": {name: [dp,...]}, "workouts": [...]}
+    if not isinstance(data, dict):
+        raise ValueError("data must be an object")
+    for key in ("metrics", "workouts"):
+        if data.get(key) is not None and not isinstance(data[key], list):
+            raise ValueError(f"{key} must be a list")
+    names = set()
+    for metric in data.get("metrics") or []:
+        if not isinstance(metric, dict) or not isinstance(metric.get("name"), str) or not metric["name"]:
+            raise ValueError("metric must have a name")
+        if metric["name"] in names:
+            raise ValueError("duplicate metric name")
+        names.add(metric["name"])
+        if not isinstance(metric.get("data"), list):
+            raise ValueError("metric data must be a list")
+        if metric.get("units") is not None and not isinstance(metric["units"], str):
+            raise ValueError("units must be a string")
+        for dp in metric["data"]:
+            if not isinstance(dp, dict):
+                raise ValueError("datapoint must be an object")
+            _validate_stamp(dp.get("date"))
+            if dp.get("units") is not None and not isinstance(dp["units"], str):
+                raise ValueError("units must be a string")
+            if metric["name"] in ACCUMULATING_METRICS and "qty" not in dp:
+                raise ValueError("accumulating metric requires qty")
+            for key in ("qty", "Min", "Max", "Avg", "totalSleep", "asleep", "inBed", "deep", "rem", "core", "awake"):
+                if key in dp and (isinstance(dp[key], bool) or not isinstance(dp[key], (int, float)) or not math.isfinite(dp[key])):
+                    raise ValueError("metric values must be finite numbers")
+            for key in ("sleepStart", "sleepEnd", "inBedStart", "inBedEnd"):
+                if dp.get(key):
+                    _validate_stamp(dp[key])
+    for workout in data.get("workouts") or []:
+        if not isinstance(workout, dict):
+            raise ValueError("workout must be an object")
+        _validate_stamp(workout.get("start"))
+        if workout.get("end") is not None:
+            _validate_stamp(workout["end"])
+    return data
+
+
+def _aggregation(dps):
+    """Classify timestamps, never cardinality alone; midnight alone is ambiguous."""
+    if not dps:
+        return None
+    if len(dps) == 1 and (len(dps[0]["date"]) == 10 or dps[0]["date"][11:19] == "00:00:00"):
+        return "ambiguous"
+    return "hourly" if all(_on_the_hour(dp) for dp in dps) else "raw"
+
+
+def store(payload):
+    """Validate and prepare the entire export before replacing any day file.
+
+    Replacement is atomic per file, not a multi-file filesystem transaction.
+    """
+    data = _validate_payload(payload)
+    per_day = {}  # date -> metric and workout lists
+    modes = {}
+    for metric in data.get("metrics", []) or []:
+        mode = metric.get("aggregation", data.get("aggregation", payload.get("aggregation")))
+        if mode is not None:
+            aliases = {"hour": "hourly", "day": "daily", "none": "raw"}
+            mode = aliases.get(str(mode).lower(), str(mode).lower())
+            if mode not in {"hourly", "daily", "raw"}:
+                raise ValueError("unsupported aggregation")
+        modes[metric.get("name")] = mode
 
     for metric in data.get("metrics", []) or []:
         name = metric.get("name")
@@ -172,7 +275,7 @@ def store(payload):
                 continue
             bucket = per_day.setdefault(day, {"metrics": {}, "workouts": []})
             bucket["metrics"].setdefault(name, []).append(
-                {k: v for k, v in dp.items()} | {"units": metric.get("units")}
+                dict(dp, units=metric.get("units") or dp.get("units"))
             )
 
     for wo in data.get("workouts", []) or []:
@@ -182,52 +285,77 @@ def store(payload):
                 "workouts"
             ].append(wo)
 
-    os.makedirs(DAILY_DIR, exist_ok=True)
+    root = Path(DAILY_DIR).resolve()
+    prepared = []
     metric_names = set()
     for day, incoming in per_day.items():
-        path = os.path.join(DAILY_DIR, f"{day}.json")
+        path = root / f"{day}.json"
+        if not path.resolve().is_relative_to(root):
+            raise ValueError("day path escapes health directory")
         try:
             with open(path) as fh:
                 existing = json.load(fh)
-        except (FileNotFoundError, json.JSONDecodeError):
+        except FileNotFoundError:
             existing = {"metrics": {}, "workouts": []}
-        # Days the export doesn't mention stay put. Within a day:
-        #   sleep      -> span merge, so a shorter re-export can't clobber a
-        #                 fuller record (see merge_spans)
-        #   hourly     -> merge keyed on the hour, so a partial re-export
-        #                 refines the hours it carries and leaves the rest
-        #   daily      -> replace wholesale, the old newest-wins behaviour
-        # "Hourly" is inferred from the payload carrying more than one
-        # datapoint for the metric that day. That keeps the two aggregation
-        # settings from ever mixing in one list: switching the app back to
-        # daily sends a single datapoint, which replaces the hourly buckets
-        # outright rather than sitting alongside them and being averaged in.
+        # Sleep retains span semantics; other metrics carry aggregation metadata.
+        # Metadata-free midnight singletons cannot prove daily vs hourly and must
+        # not be combined with other timestamps without an explicit mode.
         for name, dps in incoming["metrics"].items():
-            folded = False
-            if name in ACCUMULATING_METRICS:
-                folded_dps = fold_hourly(dps)
-                folded, dps = folded_dps is not dps, folded_dps
+            previous = existing["metrics"].get(name) or []
             if name in SPAN_MERGE_METRICS:
-                existing["metrics"][name] = merge_spans(
-                    existing["metrics"].get(name), dps)
-            # A folded raw export is hourly by construction even when it only
-            # spans one hour - replacing the day with it would drop the rest.
-            elif len(dps) > 1 or folded:
-                merged = {str(dp.get("date")): dp
-                          for dp in (existing["metrics"].get(name) or [])}
-                merged.update({str(dp.get("date")): dp for dp in dps})
-                existing["metrics"][name] = [merged[k] for k in sorted(merged)]
-            else:
+                existing["metrics"][name] = merge_spans(previous, dps)
+                continue
+            mode = modes[name] or _aggregation(dps)
+            old_mode = existing.get("metric_aggregation", {}).get(name) or _aggregation(previous)
+            if mode == "daily":
+                if len(dps) != 1:
+                    raise ValueError("daily aggregation requires one point per day")
                 existing["metrics"][name] = dps
+                existing.setdefault("metric_aggregation", {})[name] = mode
+                continue
+            if modes[name] == "hourly" and not all(_on_the_hour(dp) for dp in dps):
+                raise ValueError("hourly aggregation requires hour-aligned timestamps")
+            if old_mode == "daily":
+                raise ValueError("cannot merge partial data into a daily aggregate")
+            if previous:
+                # An ambiguous singleton may only update the exact same keys;
+                # an explicit daily snapshot can replace it via the branch above.
+                if old_mode == "ambiguous" or mode == "ambiguous":
+                    same_keys = {dp["date"] for dp in previous} == {dp["date"] for dp in dps}
+                    if not same_keys:
+                        raise ValueError("ambiguous daily/hourly data; explicit full daily export required")
+                elif old_mode != mode:
+                    raise ValueError("cannot mix raw and hourly aggregation")
+            existing.setdefault("metric_aggregation", {})[name] = mode
+            if name in ACCUMULATING_METRICS and mode == "raw":
+                if any(len(dp["date"]) < 19 for dp in dps):
+                    raise ValueError("raw accumulating metrics require full timestamps")
+                dps = fold_hourly(dps, force=True)
+                previous = fold_hourly(previous)
+            merged = {dp["date"]: dp for dp in previous}
+            merged.update({dp["date"]: dp for dp in dps})
+            existing["metrics"][name] = [merged[k] for k in sorted(merged)]
         if incoming["workouts"]:
             existing["workouts"] = incoming["workouts"]
         existing["updated"] = datetime.now(timezone.utc).isoformat()
-        tmp = path + ".tmp"
-        with open(tmp, "w") as fh:
-            json.dump(existing, fh)
-        os.replace(tmp, path)
+        prepared.append((path, json.dumps(existing, allow_nan=False)))
         metric_names.update(incoming["metrics"])
 
+    if prepared:
+        root.mkdir(parents=True, exist_ok=True)
+    staged = []
+    try:
+        for path, contents in prepared:
+            with tempfile.NamedTemporaryFile(mode="w", dir=root, prefix=".health-", delete=False) as fh:
+                staged.append((Path(fh.name), path))
+                fh.write(contents)
+                fh.flush()
+                os.fsync(fh.fileno())
+        for tmp, path in staged:
+            os.replace(tmp, path)
+    finally:
+        for tmp, _ in staged:
+            tmp.unlink(missing_ok=True)
     return len(per_day), sorted(metric_names)
 
 
@@ -272,8 +400,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not chunk:
                     break
                 remaining -= len(chunk)
-        except OSError:
-            pass
+        except (OSError, ValueError):
+            self.close_connection = True
 
     def do_GET(self):
         # Health check for the watchdog and for curl-based debugging.
@@ -313,11 +441,17 @@ class Handler(BaseHTTPRequestHandler):
         if self.path not in ("/health", "/healthexport"):
             self._drain()
             return self._respond(404, "unknown path")
-        if API_KEY and self.headers.get("x-api-key", "") != API_KEY:
+        if not API_KEY or not hmac.compare_digest(
+                self.headers.get("x-api-key", "").encode("utf-8"), API_KEY.encode("utf-8")):
             self._drain()
             return self._respond(403, "bad or missing x-api-key header")
-        body = self._read_body()
+        try:
+            body = self._read_body()
+        except ValueError:
+            self.close_connection = True
+            return self._respond(400, "invalid request framing")
         if body is None:
+            self.close_connection = True
             return self._respond(413, "body missing or too large")
         try:
             payload = json.loads(body)
@@ -330,6 +464,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             with STORE_LOCK:
                 days, metrics = store(payload)
+        except ValueError:
+            return self._respond(400, "invalid health payload or incompatible aggregation")
         except Exception as e:  # noqa: BLE001 - keep the server alive
             print(f"{datetime.now().isoformat()} STORE FAILED: {e}", flush=True)
             return self._respond(500, "store failed - see health.log")
@@ -339,11 +475,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    if not API_KEY:
-        print("WARNING: HEALTH_API_KEY is empty - accepting unauthenticated "
-              f"posts. Set it in {cc.HOME}/.env.", flush=True)
+    if not API_KEY.strip():
+        sys.exit("HEALTH_API_KEY must be set to a nonempty secret")
     try:
-        server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+        server = ThreadingHTTPServer((os.environ.get("HEALTH_BIND", "127.0.0.1"), PORT), Handler)
     except OSError as e:
         if e.errno == 98:  # EADDRINUSE - already running, watchdog no-op
             sys.exit(0)

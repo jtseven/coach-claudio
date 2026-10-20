@@ -60,8 +60,11 @@ base) are sent automatically after your message - don't describe them.
 {{/if}}
 
 Run `python3 {scripts}/coachlog.py recent` first and do not re-summarise any
-activity already covered there. After you have written the message, log it
-with `coachlog.py add --mode evening`, as described in the skill.
+activity already covered there. Stage the finished message's delivery note
+with `coachlog.py add --mode evening`, as described in the skill. Scheduled
+`add` calls are staged automatically; only confirmed Telegram delivery commits
+them as covered. Do not write the check-in log directly or unset the delivery
+transaction environment.
 
 Write in {language}. {evening_words} words unless planning or reviewing
 above says otherwise. No tables, no headers.

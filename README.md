@@ -28,8 +28,12 @@ Mon 19:12  Clean - 145 average, 4% of the run above the ceiling, all on the
 - **Builds your season** from your goal race and your actual history — not a
   template — and writes it into a calendar, week by week.
 - **Plans each week** around your real life: it reads your personal calendar
-  for travel and events, checks the weather, adjusts for niggles, and never
-  lets volume grow more than ~10% on what you *actually* ran.
+  for travel and events, checks the weather, and adjusts for niggles. A
+  deterministic volume validator distinguishes normal builds, planned down
+  weeks, travel and illness returns; missing evidence calls for review, not
+  an automatic increase. These are coaching guardrails, not injury predictions.
+- **Retries delivery** from a durable outbox and records coverage only after
+  Telegram confirms the message. See [delivery reliability](docs/delivery-reliability.md).
 - **Analyses runs** properly: did it do its job, time above the easy
   ceiling, heart-rate drift, matched Strava segments, heat and terrain as
   confounders.
@@ -87,6 +91,22 @@ and backing up is making `athlete/` its own private repo.
   Health, voice notes, backups, troubleshooting, and the failure modes worth
   knowing about before you run this on a server.
 - **[skill/SKILL.md](skill/SKILL.md)** — how the coach thinks.
+
+## Verification
+
+The default suites use disposable fixture homes and no external services:
+
+```bash
+python3 -m unittest discover -s tests -v
+bash tests/run.sh
+```
+
+Optional chart smoke checks use an already-installed matplotlib, never a download:
+`COACH_TEST_CHARTS=1 bash tests/run.sh`.
+
+Upgrade notes: [delivery](docs/delivery-reliability.md),
+[health ingestion](docs/health-ingestion.md), and
+[progression/data quality](docs/progression-quality.md).
 
 ## Health disclaimer
 

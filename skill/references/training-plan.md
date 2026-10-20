@@ -144,7 +144,7 @@ Sunday). The evening check-in does both on the right day.
 - **Close-out day — close out the week that just ended.** Log it, and
   reconcile next week's events against how the weekend actually went.
 
-The order is deliberate and the reason is the +10% rule. Planning happens
+The order is deliberate: a proposal needs review against completed history. Planning happens
 before the current week has finished — two sessions, usually including the
 long run, are still outstanding. So the volume decision rests partly on a
 projection, and the close-out is where that projection meets reality.
@@ -159,6 +159,13 @@ python3 <skill>/scripts/analyze.py weeklog --append \
   --target-km 18 --target-lr 9 --easy-above 4,12,2 --easy-hr 147,150,145 \
   --note "wedding Sat, long run moved to Sun"
 ```
+
+Add `--week-kind normal --coverage-complete --tolerated` **only** when the
+week is complete, the activity list is complete and the athlete's report
+supports tolerance. Other kinds are `planned-down`, `travel`, `illness`,
+`pain` and `illness-pain-return`; the default is `unknown`, not "normal".
+`--phase Base` is not evidence of tolerance. Never mark a projected week
+complete or infer symptom status from distance alone.
 
 `--activities` takes the `list_activities` JSON on stdin (`-`), a file path, or
 inline. `--append` writes to the weekly log and refuses a week that's already
@@ -203,8 +210,9 @@ Then **reconcile next week**, which is already on the calendar:
 
 - Long run happened as planned → leave next week alone.
 - Long run missed, or the week finished materially short of target → the plan
-  was built on a projection that didn't land. Recompute the +10% ceiling off
-  the real number and scale next week down. Say you've done it and why;
+  was built on a projection that didn't land. Re-run `progression` on the
+  completed log with the actual reason for the reduction and evidence of
+  tolerance, and reduce or hold next week if needed. Say you've done it and why;
   they'd rather know than find a quietly changed calendar.
 - Week came in *above* projection → do not scale up to match. The ceiling is
   a limit, not a quota.
@@ -269,10 +277,10 @@ then tell them the shape in the message. If they ask about next week in
 conversation earlier, the same procedure applies.
 
 **0. Account for the rest of this week.** The weekend hasn't happened yet.
-Take the running already logged this week, add what is still on the calendar
-for the remaining days, and use that projected total as "last week's actual"
-for step 1. Say in your message that it's provisional if the weekend carries
-a long run — which it usually does.
+Take running already logged this week and separately note what is still
+planned. A projection is provisional, never "actual", and must not be logged
+as completed evidence. Validate against completed weeks, then reconcile once
+the weekend has happened. Do not accelerate to match a projection.
 
 **1. Read the trend, not just last week.**
 
@@ -282,11 +290,38 @@ python3 <skill>/scripts/analyze.py trend --last 8
 
 - Consistently under target → **hold volume flat**, don't progress. Repeating
   a week they can actually complete beats prescribing one they can't.
-- Hitting target → progress as the plan says.
-- **Never more than ~10% above the previous week's actual running.** Not the
-  planned figure — the actual one. `trend` prints that ceiling directly. The
-  injury risk is doing too much too soon, and a plan that ratchets up on
-  paper while sessions are missed is how people get hurt.
+- Hitting target is not automatic permission to increase. Confirm coverage,
+  symptoms, tolerance and the rest of their sport, then validate a proposal.
+- **Use one policy, not a second hand-calculated ceiling.** `progression`,
+  `trend`, `block` and `week` use the same guardrails. Ordinary builds are
+  bounded by both the last completed normal week and a recent multiweek
+  tolerated normal baseline. Sparse/unconfirmed history cannot justify an
+  automatic jump. The default 10% build cap is a configurable heuristic,
+  not a scientifically guaranteed injury-prevention threshold.
+- **Planned down-week return:** a documented reduction may return to the
+  recent normal baseline, not get trapped at down-week km × 1.1. For example,
+  tolerated normal weeks of 30, 32 and 31 km, then a planned 22 km down week,
+  can support reviewing 31 km — not automatically prescribing it.
+- **Travel return:** use a discounted normal baseline (default 75%) and
+  account for travel fatigue and cross-training. Cycling/swimming does not
+  translate into running-km credit. A zero week is an explicit return case,
+  not a denominator for +10% and not permission to leap to an old peak.
+- **Illness/pain return:** no automatic escalation. Require an explicit
+  reason, evidence, and a separately reviewed `--return-cap-km`; the tool
+  limits it further (default at most 50% of the normal baseline). This is
+  not clinical clearance; symptoms and appropriate professional advice
+  override arithmetic. Never relabel illness as a planned down week.
+
+```bash
+python3 <skill>/scripts/analyze.py --json progression --mode planned-down \
+  --proposed-km 31 --reason "scheduled recovery week" \
+  --evidence "three recent complete normal weeks tolerated; no current symptoms reported"
+```
+
+Exit 2 means the proposal is rejected; read `reasons` before changing anything.
+Missing/stale history, gaps, or lack of an eligible baseline produce no return
+allowance. Keep existing log entries; do not invent retrospective tolerance.
+Policy configuration, exact schema and offline examples: `docs/progression-quality.md`.
 
 The ceiling-adherence column is the other half: "you've held the ceiling on
 9 of the last 11 easy runs" is worth saying out loud when it's true. Say it

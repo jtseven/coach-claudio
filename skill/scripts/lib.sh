@@ -103,8 +103,9 @@ alert() {
     echo "$(now) alert not sent (no Telegram credentials): $1" >&2
     return 1
   fi
-  curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+  export TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID
+  python3 "$SCRIPT_DIR/delivery.py" telegram sendMessage \
     --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-    --data-urlencode "text=$1" > /dev/null \
+    --data-urlencode "text=$1" \
     || { echo "$(now) alert also failed to send" >&2; return 1; }
 }

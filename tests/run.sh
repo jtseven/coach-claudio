@@ -13,10 +13,15 @@ FIX="$REPO/tests/fixtures"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-export COACH_HOME="$TMP/home"
-mkdir -p "$COACH_HOME"
-ln -s "$REPO/skill" "$COACH_HOME/skill"
-S="$REPO/skill/scripts"
+export COACH_HOME="$TMP/coach"
+export HOME="$TMP/user"
+export XDG_CONFIG_HOME="$HOME/.config" XDG_CACHE_HOME="$HOME/.cache"
+export PYTHONPYCACHEPREFIX="$TMP/bytecode"
+# Never source the operator's Claude/Telegram credentials in fixture tests.
+unset RUNNING_COACH_HOME TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID HEALTH_API_KEY
+mkdir -p "$COACH_HOME" "$HOME"
+cp -R "$REPO/skill" "$COACH_HOME/skill"
+S="$COACH_HOME/skill/scripts"
 
 PASS=0
 FAIL=0
@@ -116,7 +121,7 @@ out=$(python3 "$S/analyze.py" weeklog --activities "$FIX/activities.json" --week
 if grep -q '"emtb_h": 0.5' <<<"$out" && grep -q '"easy_runs_under_ceiling": 1' <<<"$out"; then ok "weeklog splits commute, rates by time"; else bad "weeklog splits commute, rates by time" "$out"; fi
 expect "weeklog --append" "appended" python3 "$S/analyze.py" weeklog --append --activities "$FIX/activities.json" --week-of 2026-09-07 --week 1 --target-km 20 --target-lr 10
 expect_fail "weeklog refuses duplicate" "already in the weekly log" python3 "$S/analyze.py" weeklog --append --activities "$FIX/activities.json" --week-of 2026-09-09 --week 1
-expect "trend" "Ceiling for next week (+10% on last actual): 23.1 km" python3 "$S/analyze.py" trend
+expect "trend" "Ceiling for next week: unavailable — review history and return context" python3 "$S/analyze.py" trend
 expect "block" "Block W1-W1" python3 "$S/analyze.py" block
 
 echo "streams and the run log"
@@ -154,13 +159,13 @@ expect_fail "cs needs three distances" "need maximal efforts at 3+" python3 "$S/
 expect "cs warns about one activity" "All efforts came from one activity" python3 "$S/analyze.py" cs --performance '{"best_efforts":[{"type_value":"Fastest1k","value":285},{"type_value":"FastestMile","value":488},{"type_value":"Fastest2Mile","value":1012}]}'
 
 echo "charts"
-if command -v uv >/dev/null 2>&1; then
+if [[ "${COACH_TEST_CHARTS:-0}" == "1" ]] && python3 -c 'import matplotlib' >/dev/null 2>&1; then
   for c in weekly load aerobic; do
-    expect "charts.py $c" "$c.png" uv run --quiet --script "$S/charts.py" "$c"
+    expect "charts.py $c" "$c.png" python3 "$S/charts.py" "$c"
   done
-  expect "charts.py run" "run.png" uv run --quiet --script "$S/charts.py" run --streams "$TMP/streams.json"
+  expect "charts.py run" "run.png" python3 "$S/charts.py" run --streams "$TMP/streams.json"
 else
-  echo "  skip  charts (uv not installed)"
+  echo "  skip  charts (opt in with COACH_TEST_CHARTS=1 and preinstalled matplotlib; no downloads)"
 fi
 
 echo "health"

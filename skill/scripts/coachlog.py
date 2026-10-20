@@ -31,6 +31,8 @@ hand-parsing the file.
 
 import argparse
 import json
+import os
+from pathlib import Path
 import sys
 from datetime import datetime
 
@@ -114,9 +116,10 @@ def cmd_add(a):
     }
     if not cc.write_allowed("check-in log entry"):
         return 0
-    with LOG.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    print("logged")
+    from delivery import append_log
+    stage = os.environ.get('COACH_DELIVERY_STAGE')
+    append_log(Path(stage) if stage else LOG, [entry])
+    print("staged (not covered until delivery)" if stage else "logged")
     return 0
 
 
