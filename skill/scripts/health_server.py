@@ -196,7 +196,8 @@ def _validate_stamp(value):
     return day
 
 
-def _validate_payload(payload):
+def _validate_payload(payload, context=None):
+    context = {} if context is None else context
     if not isinstance(payload, dict):
         raise ValueError("payload must be an object")
     data = payload.get("data", payload)
@@ -207,6 +208,7 @@ def _validate_payload(payload):
             raise ValueError(f"{key} must be a list")
     names = set()
     for metric in data.get("metrics") or []:
+        context["metric"] = metric.get("name") if isinstance(metric, dict) else None
         if not isinstance(metric, dict) or not isinstance(metric.get("name"), str) or not metric["name"]:
             raise ValueError("metric must have a name")
         if metric["name"] in names:
@@ -253,7 +255,17 @@ def store(payload):
 
     Replacement is atomic per file, not a multi-file filesystem transaction.
     """
-    data = _validate_payload(payload)
+    context = {}
+    try:
+        return _store(payload, context)
+    except ValueError as exc:
+        where = " ".join(f"{k}={v}" for k, v in context.items())
+        raise ValueError(f"{exc} [{where}]" if where else str(exc)) from exc
+
+
+def _store(payload, context):
+    data = _validate_payload(payload, context)
+    context.clear()
     per_day = {}  # date -> metric and workout lists
     modes = {}
     for metric in data.get("metrics", []) or []:
@@ -301,6 +313,7 @@ def store(payload):
         # Metadata-free midnight singletons cannot prove daily vs hourly and must
         # not be combined with other timestamps without an explicit mode.
         for name, dps in incoming["metrics"].items():
+            context.update(metric=name, day=day)
             previous = existing["metrics"].get(name) or []
             if name in SPAN_MERGE_METRICS:
                 existing["metrics"][name] = merge_spans(previous, dps)
@@ -315,6 +328,28 @@ def store(payload):
                 continue
             if modes[name] == "hourly" and not all(_on_the_hour(dp) for dp in dps):
                 raise ValueError("hourly aggregation requires hour-aligned timestamps")
+            if (previous and name not in ACCUMULATING_METRICS and old_mode != mode
+                    and "raw" in (old_mode, mode)):
+                # Point readings (cardio_recovery, vo2_max, ...) often arrive
+                # from two HAE automations, raw and hourly. They are never
+                # summed, so this can't double-count - and rejecting it threw
+                # away the whole export, sleep and steps included. Keep raw,
+                # the fuller record: raw replaces, anything else is skipped.
+                if mode != "raw":
+                    print(f"{datetime.now().isoformat()} kept raw {name} on {day}, "
+                          f"skipped {mode} copy", flush=True)
+                    continue
+                previous = []
+            if (previous and old_mode == "hourly" and mode == "raw" and not modes[name]
+                    and len({dp["date"][14:19] for dp in dps}) == 1):
+                # HAE anchors the first hourly buckets of an export at the
+                # previous export's time (22:29:26, 23:29:26, ...). They look
+                # raw but overlap clock-hour buckets this day already has;
+                # merging them would double-count, rejecting them sank the
+                # whole export. The stored day is the complete record.
+                print(f"{datetime.now().isoformat()} kept hourly {name} on {day}, "
+                      f"skipped {len(dps)} offset bucket(s)", flush=True)
+                continue
             if old_mode == "daily":
                 raise ValueError("cannot merge partial data into a daily aggregate")
             if previous:
@@ -325,7 +360,9 @@ def store(payload):
                     if not same_keys:
                         raise ValueError("ambiguous daily/hourly data; explicit full daily export required")
                 elif old_mode != mode:
-                    raise ValueError("cannot mix raw and hourly aggregation")
+                    odd = [dp["date"] for dp in dps if not _on_the_hour(dp)][:3]
+                    raise ValueError(f"cannot mix raw and hourly aggregation "
+                                     f"(stored {old_mode}, incoming {mode}; e.g. {odd})")
             existing.setdefault("metric_aggregation", {})[name] = mode
             if name in ACCUMULATING_METRICS and mode == "raw":
                 if any(len(dp["date"]) < 19 for dp in dps):
@@ -464,7 +501,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             with STORE_LOCK:
                 days, metrics = store(payload)
-        except ValueError:
+        except ValueError as e:
+            print(f"{datetime.now().isoformat()} REJECTED: {e}", flush=True)
             return self._respond(400, "invalid health payload or incompatible aggregation")
         except Exception as e:  # noqa: BLE001 - keep the server alive
             print(f"{datetime.now().isoformat()} STORE FAILED: {e}", flush=True)
