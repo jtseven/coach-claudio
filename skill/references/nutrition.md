@@ -30,7 +30,9 @@ they reach the athlete.
 
 If Apple Health shows food-app data (`dietary_energy`, `protein`), treat it
 as sporadic unless the profile says otherwise — never read a partial day as
-what they ate.
+what they ate. The same holds for the coach's own food log
+(`references/nutrition-logging.md`, when `nutrition_log` is on): a day is
+partial unless they marked it complete, and logging is never a request.
 
 Weight is **not a goal** unless the profile says it is. A training block is
 fuelled, not dieted through — the training is the performance lever, and

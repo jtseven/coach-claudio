@@ -177,6 +177,27 @@ expect "trend" "Resting HR" python3 "$S/health.py" trend --metric resting_heart_
 echo "weather (offline parts)"
 expect "weather needs no network for --help" "forecast" python3 "$S/weather.py" --help
 
+echo "nutrition log (offline)"
+MEAL='{"eaten_at":"2026-10-25T08:00:00+01:00","meal":"breakfast","source_events":["smoke:1"],"items":[{"name":"Skyr","amount":"250 g","basis":"100g","nutrients":{"energy_kcal":63,"protein_g":11,"carbohydrate_g":4,"sugars_g":4,"fat_g":0.2},"provenance":{"kind":"label"}}]}'
+expect "nutrition help" "image" python3 "$S/nutrition.py" --help
+expect "nutrition off by default" "nutrition log off" python3 "$S/nutrition.py" status
+expect_fail "nutrition add refused when off" "nutrition logging is off" python3 "$S/nutrition.py" add "$MEAL"
+if [[ -e "$COACH_HOME/athlete/state/nutrition" ]]; then bad "off creates no nutrition state"; else ok "off creates no nutrition state"; fi
+python3 - "$COACH_HOME/athlete/config.toml" <<'PY'
+import sys
+from pathlib import Path
+p = Path(sys.argv[1])
+p.write_text(p.read_text().replace("[integrations]\n", "[integrations]\nnutrition_log = true\n", 1))
+PY
+expect "nutrition dry-run add" "dry run - nothing written" env COACH_DRY_RUN=1 python3 "$S/nutrition.py" add "$MEAL"
+if [[ -e "$COACH_HOME/athlete/state/nutrition" ]]; then bad "dry run creates no ledger"; else ok "dry run creates no ledger"; fi
+expect "nutrition add" "158 kcal" python3 "$S/nutrition.py" add "$MEAL"
+expect "nutrition dedupe by message" "duplicate of m_" python3 "$S/nutrition.py" add "$MEAL"
+expect "nutrition day is partial" "not total intake" python3 "$S/nutrition.py" day 2026-10-25
+expect_fail "nutrition missing amount asks" "How much" python3 "$S/nutrition.py" add '{"items":[{"name":"Skyr","basis":"100g","nutrients":{"energy_kcal":63},"provenance":{"kind":"label"}}]}'
+expect_fail "nutrition bad barcode" "check digit" python3 "$S/nutrition.py" lookup 4000000000014
+expect_fail "nutrition offline lookup has no fallback" "no fallback values" python3 "$S/nutrition.py" lookup --offline 4000000000013
+
 
 echo
 echo "$PASS passed, $FAIL failed"

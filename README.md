@@ -37,6 +37,9 @@ Mon 19:12  Clean - 145 average, 4% of the run above the ceiling, all on the
 - **Analyses runs** properly: did it do its job, time above the easy
   ceiling, heart-rate drift, matched Strava segments, heat and terrain as
   confounders.
+- **Logs food, if you want it to** (off by default): photos, nutrition
+  labels, barcodes via Open Food Facts, or text, into a private local
+  ledger. See [nutrition tracking](docs/nutrition-tracking.md).
 - **Keeps it short.** It's written to be read on a phone, one-handed. One
   main point per message.
 
@@ -105,8 +108,9 @@ Optional chart smoke checks use an already-installed matplotlib, never a downloa
 `COACH_TEST_CHARTS=1 bash tests/run.sh`.
 
 Upgrade notes: [delivery](docs/delivery-reliability.md),
-[health ingestion](docs/health-ingestion.md), and
-[progression/data quality](docs/progression-quality.md).
+[health ingestion](docs/health-ingestion.md),
+[progression/data quality](docs/progression-quality.md), and
+[nutrition tracking](docs/nutrition-tracking.md).
 
 ## Health disclaimer
 

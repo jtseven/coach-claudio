@@ -4,6 +4,10 @@
 state/health/
 state/weekly_chart.png
 state/charts/
+# Food log: temporary image copies and public product data stay local.
+state/nutrition/inbox/
+state/nutrition/provider_cache.sqlite3
+state/nutrition/*-journal
 state/postrun.lock
 state/postrun_failures
 state/typing-*.pid
