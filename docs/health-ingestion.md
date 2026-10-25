@@ -100,6 +100,23 @@ already-folded raw data without metadata looks like hourly data; it cannot be
 reliably distinguished after the fact. Rejecting an incompatible update is safer
 than guessing and double-counting. Keep one aggregation mode per metric/day.
 
+Two cases seen in real HAE setups are tolerated instead of rejected, because a
+rejection discards the *whole* export (sleep and steps included):
+
+* **Point metrics from two automations** (e.g. `cardio_recovery`, `vo2_max`
+  sent raw by one job and hourly by another). They are never summed, so the raw
+  record is kept: raw replaces a stored hourly/ambiguous copy, and an incoming
+  non-raw copy is skipped. Accumulating metrics still reject the mix.
+* **Offset hourly buckets.** HAE anchors the first buckets of an export at the
+  previous export's time (`22:29:26`, `23:29:26`, …). When the day already has
+  clock-hour buckets and no aggregation is declared, incoming points sharing
+  one identical minute:second offset are skipped as overlapping that day's
+  complete record. Genuine raw samples (varying seconds) are still rejected.
+
+Every skip and every 400 is logged with the metric, day and reason
+(`REJECTED: ... [metric=... day=...]`), so a failing export can be diagnosed
+from `health.log` without capturing the payload.
+
 **Raw folding is a size guard, not a source deduplicator or a lossless raw archive.**
 A raw upload must contain the full snapshot of each hour it touches: a later
 upload replaces the corresponding folded hour, it does not add to the prior

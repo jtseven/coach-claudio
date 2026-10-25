@@ -145,6 +145,37 @@ class IngestionTests(unittest.TestCase):
             hs.store(export([("01:00:01", 3), ("01:00:02", 4)], "raw"))
         self.assertEqual(self.day(), before)
 
+    def test_point_metric_from_two_automations_keeps_raw_and_stores_the_rest(self):
+        # Raw automation first, then the hourly one carrying the same vital
+        # plus sleep-adjacent sums: the vital keeps its raw record and the
+        # rest of the export is not thrown away.
+        hs.store(export([("18:42:10", 41)], "raw", name="cardio_recovery"))
+        hourly = export([("18:00:00", 41)], "hourly", name="cardio_recovery")
+        hourly["data"]["metrics"] += export([("01:00:00", 10)], "hourly")["data"]["metrics"]
+        hs.store(hourly)
+        day = self.day()
+        self.assertEqual([p["date"][11:19] for p in day["metrics"]["cardio_recovery"]], ["18:42:10"])
+        self.assertEqual([p["qty"] for p in day["metrics"]["step_count"]], [10])
+        # and raw arriving after hourly replaces it
+        hs.store(export([("09:00:00", 50)], "hourly", name="vo2_max"))
+        hs.store(export([("09:13:00", 51)], "raw", name="vo2_max"))
+        self.assertEqual([p["qty"] for p in self.day()["metrics"]["vo2_max"]], [51])
+
+    def test_offset_hourly_buckets_from_export_start_do_not_sink_the_export(self):
+        # The day already has clock-hour buckets; a later export starting at
+        # 22:29:26 re-sends that tail as offset buckets plus a new day.
+        hs.store(export([("22:00:00", 100), ("23:00:00", 50)]))
+        offset = export([("22:29:26", 70), ("23:29:26", 30)])
+        offset["data"]["metrics"][0]["data"].append(
+            {"date": "2026-06-02 01:00:00 +0000", "qty": 12})
+        hs.store(offset)
+        self.assertEqual([p["qty"] for p in self.day()["metrics"]["step_count"]], [100, 50])
+        nxt = json.loads((self.root / "daily/2026-06-02.json").read_text())
+        self.assertEqual([p["qty"] for p in nxt["metrics"]["step_count"]], [12])
+        # genuine raw samples (varying seconds) still may not mix
+        with self.assertRaises(ValueError):
+            hs.store(export([("22:10:01", 3), ("22:41:17", 4)]))
+
     def test_legacy_daily_is_not_mixed_into_hourly(self):
         hs.store(export([("00:00:00", 100)]))
         with self.assertRaises(ValueError):
