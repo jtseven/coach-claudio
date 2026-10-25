@@ -355,7 +355,8 @@ def status():
         out['problem'] = str(e)
         return out
     out['capabilities'] = caps
-    out['can_write'] = out['logged_in'] and caps['create_consumed'] == 'live_confirmed'
+    out['can_write'] = out['logged_in'] and any(
+        unit['create_consumed'] == 'live_confirmed' for unit in caps['by_base_unit'].values())
     return out
 
 
@@ -533,19 +534,31 @@ class Client:
             self.sleep(min(2 ** (attempt - 1), 8))
 
     # -- capabilities -----------------------------------------------------
-    def contract(self):
-        """Valid contract record written by `verify-write`, or {}. Config keys
-        such as "verified": true are ignored: only an observed run counts."""
+    def contracts(self):
+        """Independently validated proofs. Legacy v1 records prove only their unit.
+
+        Keep each original digest intact when adding another unit's proof.
+        Configuration allowing ml is permission to probe, never evidence.
+        """
         path = self.config.contract_path
         if not path.exists() and not path.is_symlink():
             return {}
-        rec = read_private_json(path)
-        return rec if contract_valid(rec, self.config) else {}
+        saved = read_private_json(path)
+        records = saved.get('proofs', {}) if saved.get('schema') == 2 else {
+            saved.get('base_unit'): saved}
+        if not isinstance(records, dict):
+            return {}
+        return {unit: rec for unit, rec in records.items()
+                if unit in ('g', 'ml') and isinstance(rec, dict)
+                and rec.get('base_unit') == unit and contract_valid(rec, self.config)}
 
-    def capabilities(self):
+    def contract(self, base_unit='g'):
+        return self.contracts().get(base_unit, {})
+
+    def capabilities(self, base_unit='g', *, _include_units=True):
         """Per operation and nutrient: researched (pinned spec only),
         live_confirmed (recorded verify-write run), not_accepted, unverified."""
-        rec = self.contract()
+        rec = self.contract(base_unit)
         product = rec.get('product', {})
         consumed = rec.get('consumed', {})
         roundtrip = set(product.get('nutrients_roundtrip', []))
@@ -560,7 +573,7 @@ class Client:
                 nutrients[key] = 'researched'
             else:
                 nutrients[key] = 'live_confirmed' if key in roundtrip else 'not_accepted'
-        return {'read': 'researched', 'search': 'researched',
+        caps = {'read': 'researched', 'search': 'researched',
                 'create_private_product': live(product.get('create_readback')
                                                and 'energy_kcal' in roundtrip),
                 'create_consumed': live(consumed.get('create_readback') and
@@ -568,12 +581,16 @@ class Client:
                 'delete_consumed': live(consumed.get('delete_readback')),
                 'base_unit': rec.get('base_unit'), 'recorded_at': rec.get('recorded_at'),
                 'nutrients': nutrients}
+        if _include_units:
+            caps['by_base_unit'] = {unit: self.capabilities(unit, _include_units=False)
+                                    for unit in ('g', 'ml')}
+        return caps
 
-    def salt_confirmed(self):
-        return self.capabilities()['nutrients']['salt_g'] == 'live_confirmed'
+    def salt_confirmed(self, base_unit='g'):
+        return self.capabilities(base_unit)['nutrients']['salt_g'] == 'live_confirmed'
 
-    def _require(self, op, probe=False):
-        if not probe and self.capabilities()[op] != 'live_confirmed':
+    def _require(self, op, probe=False, base_unit='g'):
+        if not probe and self.capabilities(base_unit)[op] != 'live_confirmed':
             raise ContractUnverified(
                 f'{op} is not confirmed on this YAZIO account; it stays local. The account '
                 'owner can run the opt-in check: nutrition_yazio.py verify-write --help')
@@ -620,11 +637,15 @@ class Client:
     def create_private_product(self, payload, _probe=False):
         """POST /v22/user/products, then read it back. Existing id: reconcile,
         never a second create. Returns {'status': 'confirmed', ...}."""
-        self._require('create_private_product', _probe)
+        self._require('create_private_product', _probe, payload.get('base_unit'))
         self._check_product_draft(payload)
-        if not _probe and payload.get('base_unit') != self.capabilities()['base_unit']:
-            raise ContractUnverified(f'base unit {payload.get("base_unit")!r} was not part of '
-                                     'the recorded verify-write check')
+        if not _probe:
+            caps = self.capabilities(payload.get('base_unit'))['nutrients']
+            unverified = [local for local, key in NUTRIENT_KEYS.items()
+                          if key in payload['nutrients'] and caps[local] != 'live_confirmed']
+            if unverified:
+                raise ContractUnverified('product nutrients not live-confirmed for '
+                                         + str(payload.get('base_unit')) + ': ' + ', '.join(unverified))
         pid = payload['id']
         before = self.reconcile_product(payload)
         if before['status'] == 'mismatch':
@@ -682,11 +703,11 @@ class Client:
         return {'status': 'mismatch' if diffs else 'confirmed', 'id': item['id'], 'day': day,
                 'diffs': diffs, 'remote': remote}
 
-    def create_consumed(self, payload, _probe=False):
+    def create_consumed(self, payload, _probe=False, *, base_unit='g'):
         """POST /v22/user/consumed-items, then read the day back and require the
         same id, product_id, amount, daytime and wall-clock date. An existing id
         is reconciled, never re-posted (no upsert is documented)."""
-        self._require('create_consumed', _probe)
+        self._require('create_consumed', _probe, base_unit)
         item, day = self._consumed_item(payload)
         before = self.reconcile_consumed(payload)
         if before['status'] == 'mismatch':
@@ -704,11 +725,11 @@ class Client:
                                    after.get('diffs') or ['not listed after HTTP success'])
         return {**after, 'already_present': False}
 
-    def delete_consumed(self, consumed_id, day, _probe=False):
+    def delete_consumed(self, consumed_id, day, _probe=False, *, base_unit='g'):
         """DELETE /v22/user/consumed-items with {"products": "<id>"} (a single
         id string per the v22 spec, not an array or ?id=), then require that
         the day no longer lists it."""
-        self._require('delete_consumed', _probe)
+        self._require('delete_consumed', _probe, base_unit)
         checked_uuid(consumed_id, 'consumed_id')
         checked_day(day)
         if self._find_consumed(day, consumed_id) is None:
@@ -725,19 +746,21 @@ class Client:
         return {'status': 'deleted', 'id': consumed_id, 'day': day}
 
     # -- opt-in live contract check ---------------------------------------
-    def run_write_probe(self, *, consent, amount, salt_display, when=None):
+    def run_write_probe(self, *, consent, amount, salt_display, when=None, base_unit='g'):
         """The only way to reach live_confirmed. Writes to the real account:
         one private test product (all 7 nutrients, distinct values), one
-        consumed entry of `amount` g, then deletes both and checks each step by
+        consumed entry of `amount` g or ml, then deletes both and checks each step by
         read-back. ids are persisted before the first send; a rerun after an
         UNKNOWN reconciles the same ids. salt_display(question) -> bool asks the
         account owner what the app shows, since the API cannot tell g from mg."""
         if consent is not True:
             raise ContractUnverified('verify-write needs explicit consent '
                                      '(--i-consent-to-test-writes)')
+        if base_unit not in ('g', 'ml'):
+            raise ValueError('base unit must be g or ml')
         if isinstance(amount, bool) or not isinstance(amount, (int, float)) \
                 or not 0 < amount <= PROBE_MAX_AMOUNT:
-            raise ValueError(f'test amount must be in (0, {PROBE_MAX_AMOUNT}] g')
+            raise ValueError(f'test amount must be in (0, {PROBE_MAX_AMOUNT}] {base_unit}')
         z = zone(self.config.timezone)
         if z is None:
             raise NotConfigured('config: timezone (IANA name) is not set')
@@ -750,18 +773,28 @@ class Client:
                                          'manually; login archives cleanup evidence before a new probe')
             if amount != pend['amount']:
                 raise ValueError('pending probe amount differs; resume with the original amount')
+            saved_unit = pend.get('base_unit')
+            draft_unit = pend['product_payload'].get('base_unit')
+            # Before per-unit probes, only gram probes existed. Infer only g,
+            # and only from the original durable product, never current config.
+            if saved_unit is None and draft_unit == 'g':
+                saved_unit = 'g'
+            if saved_unit != base_unit or draft_unit != saved_unit:
+                raise ValueError('pending probe base unit differs; resume with the original unit')
             if pend['phase'] not in ('create_product', 'create_consumed', 'cleanup_consumed',
                                      'cleanup_product', 'record'):
                 raise ProtocolError('pending probe phase is invalid')
         else:
             pid, cid = str(uuid.uuid4()), str(uuid.uuid4())
             when = when or datetime.fromtimestamp(self.clock(), z)
-            draft = prepare_product('100g', PROBE_PER100, pid, PROBE_NAME,
+            name = PROBE_NAME if base_unit == 'g' else f'{PROBE_NAME} [ml {pid[:8]}]'
+            draft = prepare_product('100' + base_unit, PROBE_PER100, pid, name,
                                     category=cfg.product.get('category'),
                                     base_units=cfg.product.get('base_units'), salt_write=True)['payload']
-            prepared = self.prepare_consumed(cid, pid, amount, 'g', when, 'snack', 'g')
+            prepared = self.prepare_consumed(cid, pid, amount, base_unit, when, 'snack', base_unit)
             pend = {'product_id': pid, 'consumed_id': cid, 'when': when.isoformat(),
-                    'amount': amount, 'phase': 'create_product', 'product_payload': draft,
+                    'amount': amount, 'base_unit': base_unit,
+                    'phase': 'create_product', 'product_payload': draft,
                     'consumed_payload': prepared['payload'], 'day': prepared['day']}
             write_private_json(cfg.probe_path, pend)
         pid, cid = checked_uuid(pend['product_id']), checked_uuid(pend['consumed_id'])
@@ -788,15 +821,15 @@ class Client:
                 raise ReadbackMismatch('create_private_product', pid, structural)
             roundtrip = found['verified_nutrients']
             salt_ok = 'salt_g' in roundtrip and salt_display(
-                f'In the YAZIO app, open the private product "{PROBE_NAME}". Does it show salt '
-                '0.34 g per 100 g (equivalently 340 mg per 100 g, not 0.0034 g)?') is True
+                f'In the YAZIO app, open the private product "{draft["name"]}". Does it show salt '
+                f'0.34 g per 100 {base_unit} (equivalently 340 mg per 100 {base_unit}, not 0.0034 g)?') is True
             checkpoint('create_consumed', roundtrip=roundtrip, salt_ok=salt_ok)
         if pend['phase'] == 'create_consumed':
-            made = self.create_consumed(payload, _probe=True)
+            made = self.create_consumed(payload, _probe=True, base_unit=base_unit)
             checkpoint('cleanup_consumed', date_read=made['remote'].get('date'))
         # Cleanup is monotonic: after this durable checkpoint no POST is reachable.
         if pend['phase'] == 'cleanup_consumed':
-            self.delete_consumed(cid, pend['day'], _probe=True)
+            self.delete_consumed(cid, pend['day'], _probe=True, base_unit=base_unit)
             checkpoint('cleanup_product')
         if pend['phase'] == 'cleanup_product':
             if pid in self.own_product_ids():
@@ -805,20 +838,22 @@ class Client:
                 raise ReadbackMismatch('delete_product', pid, ['still present after delete'])
             checkpoint('record')
         rec = contract_record({
-            'user_agent': cfg.user_agent, 'category': draft['category'], 'base_unit': 'g',
+            'user_agent': cfg.user_agent, 'category': draft['category'], 'base_unit': base_unit,
             'product_created': True, 'product_nutrients_roundtrip': pend['roundtrip'],
             'salt_display_confirmed_by_user': pend['salt_ok'], 'consumed_created': True,
             'consumed_fields_roundtrip': CONSUMED_FIELDS, 'consumed_deleted': True,
             'product_deleted': True, 'date_sent': payload['products'][0]['date'],
             'date_read': pend['date_read']},
             recorded_at=datetime.fromtimestamp(self.clock(), z).isoformat())
-        write_private_json(cfg.contract_path, rec)
+        proofs = self.contracts()
+        proofs[base_unit] = rec
+        write_private_json(cfg.contract_path, {'schema': 2, 'proofs': proofs})
         cfg.probe_path.unlink(missing_ok=True)
         return rec
 
     # -- payloads ---------------------------------------------------------
     def prepare_product(self, per, nutrients, product_id, name, producer=None):
-        caps = self.capabilities()['nutrients']
+        caps = self.capabilities(per[3:] if per in ('100g', '100ml') else None)['nutrients']
         keep_local = [k for k, v in caps.items() if v == 'not_accepted']
         return prepare_product(per, nutrients, product_id, name,
                                category=self.config.product.get('category'),
@@ -833,7 +868,7 @@ class Client:
                                 tz=self.config.timezone, base_unit=base_unit)
 
     # -- reads ------------------------------------------------------------
-    def _map_nutrients(self, raw):
+    def _map_nutrients(self, raw, base_unit=None):
         per_unit, warnings = {}, []
         raw = raw if isinstance(raw, dict) else {}
         for local, key in NUTRIENT_KEYS.items():
@@ -842,7 +877,7 @@ class Client:
                 continue
             if isinstance(v, bool) or not isinstance(v, (int, float)):
                 raise ProtocolError(f'product nutrient {key} is not a number')
-            if local == 'salt_g' and not self.salt_confirmed():
+            if local == 'salt_g' and not self.salt_confirmed(base_unit):
                 warnings.append('salt: nutrient.salt scale for products is unverified; '
                                 'not mapped (keep the local salt value)')
                 continue
@@ -855,7 +890,7 @@ class Client:
         data = self._get(f'/products/{product_id}', what='product read')
         if not isinstance(data, dict):
             raise ProtocolError('product read: expected an object')
-        per_unit, warnings = self._map_nutrients(data.get('nutrients'))
+        per_unit, warnings = self._map_nutrients(data.get('nutrients'), data.get('base_unit'))
         eans = data.get('eans') or []
         if not isinstance(eans, list) or not all(isinstance(e, str) for e in eans):
             raise ProtocolError('product read: eans must be strings')
@@ -881,7 +916,7 @@ class Client:
         known = {k: _nutrient(v, k) for k, v in nutrients.items() if v is not None}
         if 'energy_kcal' not in known:
             raise ValueError('nutrients: canonical keys with energy_kcal known')
-        not_compared = [] if self.salt_confirmed() else [k for k in ('salt_g',) if k in known]
+        not_compared = [] if self.salt_confirmed(per[3:]) else [k for k in ('salt_g',) if k in known]
         reasons = []
         for hit in self.search(barcode)[:max_hits]:
             pid = hit.get('product_id')
@@ -1252,13 +1287,16 @@ def cmd_status(args, transport):
         return 0
     print(f'logged in: {"yes" if st["logged_in"] else "no"}')
     caps = st['capabilities'] or {}
+    for unit, unit_caps in caps.get('by_base_unit', {}).items():
+        print(f'{unit}: create_consumed={unit_caps["create_consumed"]}, '
+              f'salt={unit_caps["nutrients"]["salt_g"]}, recorded_at={unit_caps["recorded_at"]}')
     for op in ('create_private_product', 'create_consumed', 'delete_consumed'):
         print(f'{op}: {caps.get(op)}')
     print('nutrients: ' + ', '.join(f'{k}={v}' for k, v in (caps.get('nutrients') or {}).items()))
     if caps.get('recorded_at'):
         print(f'live contract recorded {caps["recorded_at"]} (base unit {caps["base_unit"]})')
     else:
-        print('no live contract recorded: everything is researched (spec only); writes stay local')
+        print('no gram contract recorded; see per-unit capabilities above for write permissions')
     print(f'writes allowed: {"yes" if st["can_write"] else "no"}')
     if st['problem']:
         print(f'problem: {st["problem"]}')
@@ -1288,7 +1326,7 @@ def cmd_verify_write(args, transport):
         return 2
     client = Client.load(transport=transport)
     print(f'This will, on your real YAZIO account: create the private product '
-          f'"{PROBE_NAME}", log {args.amount:g} g of it as a snack now, delete that entry, '
+          f'"{PROBE_NAME}" (unit {args.base_unit}), log {args.amount:g} {args.base_unit} of it as a snack now, delete that entry, '
           'delete the product, and check every step by reading it back.')
     if input('Type WRITE to continue: ').strip() != 'WRITE':
         print('aborted, nothing sent')
@@ -1297,7 +1335,8 @@ def cmd_verify_write(args, transport):
     def salt_display(question):
         return input(f'{question} [y/N]: ').strip().lower() == 'y'
 
-    rec = client.run_write_probe(consent=True, amount=args.amount, salt_display=salt_display)
+    rec = client.run_write_probe(consent=True, amount=args.amount, base_unit=args.base_unit,
+                                 salt_display=salt_display)
     print(f'recorded live contract -> {client.config.contract_path}')
     print('nutrients stored as sent: ' + ', '.join(rec['product']['nutrients_roundtrip']))
     print(f'salt mapping confirmed: {"yes" if rec["salt"]["display_confirmed_by_user"] else "no"}')
@@ -1320,8 +1359,10 @@ def main(argv=None, transport=None):
     v.add_argument('--search', help='optional text or barcode to search')
     w = sub.add_parser('verify-write', help='opt-in live write contract check (interactive)')
     w.add_argument('--i-consent-to-test-writes', action='store_true')
+    w.add_argument('--base-unit', choices=('g', 'ml'), default='g',
+                   help='unit to verify independently (default: g); resume with the original unit')
     w.add_argument('--amount', type=float, required=True,
-                   help=f'grams to log of the test product (max {PROBE_MAX_AMOUNT})')
+                   help=f'base units to log of the test product (max {PROBE_MAX_AMOUNT})')
     args = ap.parse_args(argv)
     if args.cmd in ('setup', 'login', 'verify-write') and not _interactive():
         print(f'{args.cmd} needs an interactive local terminal; {LOCAL_ONLY} {args.cmd}')

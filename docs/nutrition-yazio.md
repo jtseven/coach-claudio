@@ -11,8 +11,8 @@ description [yazio-community/yazio-api-specification `v0.4.0`](https://github.co
 (API `/v22`), which was derived from app traffic and is incomplete. No other
 client's code is used. MIT licenses the description, not the use of the service.
 
-**Status of this code:** the adapter is tested offline against mocked contracts
-only. Nobody has run it against a live account. Every capability starts as
+**Verification scope:** repository tests use injected offline transports, not
+an account. Installing the code proves no live capability. Every capability starts as
 `researched` and only becomes `live_confirmed` once the account owner runs
 `verify-write` (below) on their own account.
 
@@ -28,6 +28,7 @@ python3 skill/scripts/nutrition_yazio.py login      # e-mail + password; stores 
 python3 skill/scripts/nutrition_yazio.py status     # offline: what is configured / confirmed
 python3 skill/scripts/nutrition_yazio.py verify     # read-only GETs against the account
 python3 skill/scripts/nutrition_yazio.py verify-write --i-consent-to-test-writes --amount 1
+python3 skill/scripts/nutrition_yazio.py verify-write --i-consent-to-test-writes --base-unit ml --amount 1
 ```
 
 - **App credentials and User-Agent** come from your own setup. The repository
@@ -51,8 +52,8 @@ Default location: `$XDG_CONFIG_HOME/coach-claudio/` (normally
 |---|---|
 | `yazio.json` | client id/secret, User-Agent, timezone, search, product settings |
 | `yazio-token.json` | access + refresh token, expiry (never the password) |
-| `yazio-contract.json` | what `verify-write` observed on the account |
-| `yazio-probe.json` | immutable payloads, amount, timestamp, observations and durable recovery phase |
+| `yazio-contract.json` | independently digested proofs by base unit (`g`, `ml`) |
+| `yazio-probe.json` | immutable payloads, amount, base unit, timestamp, observations and durable recovery phase |
 | `yazio-probe-abandoned-<uuid>.json` | previous-login cleanup evidence; inspect that account manually |
 | `yazio.lock` | inter-process lock for token refresh |
 
@@ -86,18 +87,30 @@ configured category and base unit. Its digest catches hand edits and stale
 schemas. It is a consistency check, not a signature, since the account owner
 can always edit local files.
 
+`capabilities()['by_base_unit']` reports both units independently;
+`capabilities('ml')` selects ml. Top-level fields and no-argument `contract()` /
+`salt_confirmed()` retain gram semantics for older callers. A valid old v1
+single-unit contract loads as exactly one proof, with its original digest;
+the next successful probe stores a v2 envelope of individually validated v1
+records. Adding ml preserves g, and a failed or incomplete probe does not
+replace any prior proof. Probes use the existing token manager (including its
+normal locked refresh/rotation), never an old-token override. Configuring both
+units never verifies either one.
+
 ### What `verify-write` does
 
 It writes to the real account, so it needs the flag plus typed `WRITE`
 confirmation:
 
-1. Persists two fresh UUIDs, timestamp, amount and complete immutable payloads
+1. Persists two fresh UUIDs, timestamp, amount, base unit and complete immutable payloads
    with a recovery phase before any remote mutation.
 2. Creates a private product with all 7 nutrients at distinct non-zero values,
    reads it back, and records which keys came back as sent.
 3. Asks whether the app shows salt as `0.34 g` **or equivalently `340 mg`**
-   per 100 g. Salt is only mapped once you confirm that unit-aware display.
-4. Logs `--amount` g of it (max 100), reads the day back, and compares id,
+   per 100 g or per 100 ml, as selected. Salt is only mapped for that base unit
+   once you actually inspect and confirm that unit-aware display; API roundtrip
+   alone is insufficient. The ml test product includes its unit and a unique suffix.
+4. Logs `--amount` base units of it (max 100; `--base-unit g` is the default), reads the day back, and compares id,
    product id, amount, daytime, wall-clock time and explicit null `serving` /
    `serving_quantity` (base-unit semantics).
 5. Durably enters cleanup before deleting the entry, checks absence, then
@@ -106,18 +119,23 @@ confirmation:
 6. Writes `yazio-contract.json` only after both removals are confirmed.
 
 If a step times out it ends with UNKNOWN. Rerunning uses the stored payloads
-and original timestamp; a different `--amount` is rejected before remote access.
+and original timestamp; a different `--amount` or `--base-unit` is rejected before remote access.
+An older pending gram probe with complete immutable payloads/phases but no
+explicit base-unit field resumes only when its saved product says `g`. No ml
+unit is inferred for a legacy pending file.
 Once cleanup starts, reruns only resume cleanup and never create again. Legacy
 pending files without immutable payloads/phases fail closed: inspect their
 artifacts manually, then use `login` to archive the evidence before a new probe.
-Every explicit `login` invalidates the old contract, even for the same account,
+Every explicit `login` invalidates all unit proofs, even for the same account,
 because no stable verified account id is available. It moves unfinished probe
 evidence into a private abandoned-cleanup report before switching tokens. It
 never deletes old-account artifacts on the new login; inspect the previous
 account manually. Token refresh does not invalidate proof, and rotating tokens
 are not used as account identity.
 Remote test entries are only created by this command, never on setup, login or
-enable. It covers `g` products; `ml` products stay unconfirmed.
+enable. Each run covers only the selected unit: g never proves ml or its salt
+display, and ml never proves g. Finish or recover the pending probe before starting
+the other unit's check.
 
 ## Nutrients and units
 
@@ -147,7 +165,8 @@ import nutrition_yazio as ny
 
 ny.status() -> dict                       # offline; configured, logged_in, can_write, capabilities
 c = ny.Client.load(transport=None)        # NotConfigured / InsecureConfig when not set up
-c.capabilities() -> dict
+c.capabilities(base_unit='g') -> dict  # includes independent by_base_unit entries
+c.contract(base_unit='g') -> dict      # selected validated proof, or {}
 
 # deterministic, no I/O; ids are supplied by the caller's outbox and never generated
 ny.prepare_product(per, nutrients, product_id, name, *, category, base_units,
@@ -169,8 +188,8 @@ c.reconcile_product(payload) / c.reconcile_consumed(payload)
 
 # writes (refused unless live_confirmed; single send, never retried)
 c.create_private_product(payload) -> {'status': 'confirmed', 'already_present': bool, ...}
-c.create_consumed(payload)        -> {'status': 'confirmed', 'already_present': bool, ...}
-c.delete_consumed(consumed_id, day) -> {'status': 'deleted'|'absent', ...}
+c.create_consumed(payload, base_unit='g') -> {'status': 'confirmed', 'already_present': bool, ...}
+c.delete_consumed(consumed_id, day, base_unit='g') -> {'status': 'deleted'|'absent', ...}
 ```
 
 Exceptions: `ContractUnverified`, `UnknownOutcome` (`.op .id .day`),
@@ -179,6 +198,10 @@ Exceptions: `ContractUnverified`, `UnknownOutcome` (`.op .id .day`),
 `NotConfigured`, `InsecureConfig`. All of them subclass `YazioError`.
 
 How the parent should use it:
+
+- Pass the immutable product's base unit explicitly to consumed creates/deletes.
+  The consumed wire format itself has no unit field. Omitting the keyword means
+  grams for backward compatibility, not whichever proof was recorded last.
 
 - Persist the outbox row, with stable product and consumed UUIDs and the
   payload fingerprint, **before** calling a write. The same Telegram delivery

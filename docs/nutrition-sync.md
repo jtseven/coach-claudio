@@ -19,14 +19,19 @@ python3 skill/scripts/nutrition_yazio.py setup
 python3 skill/scripts/nutrition_yazio.py login
 python3 skill/scripts/nutrition_yazio.py verify
 python3 skill/scripts/nutrition_yazio.py verify-write --i-consent-to-test-writes --amount 1
+python3 skill/scripts/nutrition_yazio.py verify-write --i-consent-to-test-writes --base-unit ml --amount 1
 python3 skill/scripts/nutrition_yazio.py status
 ```
 
 `verify` is read-only; it does **not** authorize writes. `verify-write` deliberately
 creates and removes a test snack and asks about salt display. Only its recorded,
-read-back-verified contract enables writes. It currently verifies **g**, not ml.
-Do not hand-edit a contract to claim ml support. Re-login invalidates the prior
-contract; repeat verification as required by the adapter.
+read-back-verified contract enables writes for the selected base unit. The default
+is **g**; verify **ml** independently with `--base-unit ml`. Each unit also needs
+its own actual user confirmation of the app's salt display before known salt
+can sync. A gram proof or config allowing ml never proves ml. Do not hand-edit
+a contract to claim support. Re-login invalidates **all** prior unit proofs;
+repeat verification as required by the adapter. Resume a pending probe with its
+original amount and unit before starting another.
 
 Then set these booleans in your **private** athlete config (merge into an existing
 `[integrations]` table rather than creating a duplicate table):
@@ -105,6 +110,11 @@ created per local item revision; there is no branded/shared-product mutation.
   capability, unaccepted known nutrients, unverified salt, and ambiguous DST wall
   times remain blocked with the adapter/core reason. There is no seven-nutrient
   export claim when the account only accepts some of them.
+- The runner selects `by_base_unit` capabilities using each item's actual g/ml
+  dimension, and passes the prepared product unit to consumed writes/deletes.
+  It retains compatibility with a legacy single-unit adapter contract, without
+  widening its scope. Known nutrients must all be confirmed for that unit;
+  otherwise the item stays blocked and its full local nutrition is unchanged.
 
 ## Readback, retry, corrections and deletion
 
