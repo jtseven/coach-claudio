@@ -565,6 +565,22 @@ def probe_results(salt_display=False, nutrients=ALL7, base_unit='g', category='s
 
 
 class Capabilities(LoggedIn):
+    def test_direct_product_write_cannot_bypass_unit_salt_gate(self):
+        self.install_contract(salt_display=False)
+        c = self.client()
+        draft = ny.prepare_product('100g', OIL, P_ID, 'Synthetic',
+                                   category='synthetic-category', base_units=['g'], salt_write=True)['payload']
+        with self.assertRaisesRegex(ny.ContractUnverified, 'salt_g'):
+            c.create_private_product(draft)
+        self.assertEqual(self.t.calls, [])
+
+    def test_ml_only_status_and_delete_use_ml_proof(self):
+        self.install_contract(base_unit='ml')
+        self.assertTrue(ny.status()['can_write'])
+        c = self.client((200, day_list()))
+        self.assertEqual(c.delete_consumed(C_ID, '2026-07-01', base_unit='ml')['status'], 'absent')
+        self.assertEqual(c.capabilities()['by_base_unit']['g']['create_consumed'], 'researched')
+
     def test_login_invalidates_contract_and_archives_abandoned_cleanup(self):
         self.install_contract()
         pending = {'product_id': P_ID, 'consumed_id': C_ID, 'when': '2026-07-01T12:30:00+02:00'}
@@ -1052,6 +1068,111 @@ class WriteProbe(LoggedIn):
         self.assertFalse((self.cfg_dir / 'yazio-contract.json').exists())
 
 
+    def test_ml_probe_preserves_old_g_proof_and_scales_without_density(self):
+        path = self.install_contract(salt_display=True)
+        old = json.loads(path.read_text())
+        c = self.script()
+        questions = []
+        rec = c.run_write_probe(consent=True, amount=1, base_unit='ml', when=self.WHEN,
+                                salt_display=lambda q: questions.append(q) or False)
+        self.assertEqual(rec['base_unit'], 'ml')
+        self.assertEqual(c.contract('g'), old)
+        self.assertEqual(c.capabilities('g')['nutrients']['salt_g'], 'live_confirmed')
+        self.assertEqual(c.capabilities('ml')['nutrients']['salt_g'], 'unverified')
+        posted = [x['body'] for x in self.t.calls if x['method'] == 'POST']
+        self.assertEqual(posted[0]['base_unit'], 'ml')
+        self.assertEqual(posted[0]['nutrients']['energy.energy'], 1.23)
+        self.assertEqual(posted[1]['products'][0]['amount'], 1)
+        self.assertIn('100 ml', questions[0])
+        self.assertNotEqual(posted[0]['name'], ny.PROBE_NAME)
+
+    def test_failed_ml_probe_never_promotes_and_preserves_prior_g(self):
+        path = self.install_contract(salt_display=True)
+        old = path.read_bytes()
+        c = self.script(drop_consumed=True)
+        with self.assertRaises(ny.ReadbackMismatch):
+            c.run_write_probe(consent=True, amount=1, base_unit='ml', when=self.WHEN,
+                              salt_display=lambda q: True)
+        self.assertEqual(path.read_bytes(), old)
+        self.assertEqual(c.capabilities('ml')['create_consumed'], 'researched')
+        before = len(self.t.calls)
+        with self.assertRaisesRegex(ValueError, 'unit'):
+            c.run_write_probe(consent=True, amount=1, base_unit='g', salt_display=lambda q: True)
+        self.assertEqual(len(self.t.calls), before)
+
+    def test_legacy_pending_g_before_salt_callback_resumes_immutable_payload(self):
+        c = self.script()
+        def pause(q):
+            raise KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            c.run_write_probe(consent=True, amount=1, when=self.WHEN, salt_display=pause)
+        path = self.cfg_dir / 'yazio-probe.json'
+        pend = json.loads(path.read_text())
+        pend.pop('base_unit', None)
+        ny.write_private_json(path, pend)
+        c = self.script()
+        rec = c.run_write_probe(consent=True, amount=1, salt_display=lambda q: True)
+        self.assertEqual(rec['base_unit'], 'g')
+        self.assertFalse(any(x['method'] == 'POST' and x['url'].endswith('/user/products')
+                             for x in self.t.calls))
+
+    def test_login_invalidates_both_proofs(self):
+        self.install_contract(salt_display=True)
+        c = self.script()
+        c.run_write_probe(consent=True, amount=1, base_unit='ml', when=self.WHEN,
+                          salt_display=lambda q: True)
+        c = self.client(token_response())
+        c.login('synthetic@example.invalid', 'SYNTH-PASSWORD')
+        for unit in ('g', 'ml'):
+            self.assertEqual(c.capabilities(unit)['create_consumed'], 'researched')
+
+    def test_unit_proofs_remain_independent_after_one_digest_is_tampered(self):
+        self.install_contract(salt_display=True)
+        c = self.script()
+        c.run_write_probe(consent=True, amount=1, base_unit='ml', when=self.WHEN,
+                          salt_display=lambda q: True)
+        path = self.cfg_dir / 'yazio-contract.json'
+        saved = json.loads(path.read_text())
+        saved['proofs']['ml']['salt']['display_confirmed_by_user'] = False
+        ny.write_private_json(path, saved)
+        self.assertEqual(c.capabilities('g')['create_consumed'], 'live_confirmed')
+        self.assertEqual(c.capabilities('ml')['create_consumed'], 'researched')
+
+    def test_completed_ml_proof_allows_ml_creates_and_not_g(self):
+        c = self.script()
+        c.run_write_probe(consent=True, amount=1, base_unit='ml', when=self.WHEN,
+                          salt_display=lambda q: True)
+        self.assertEqual(c.contract(), {})
+        self.assertFalse(c.salt_confirmed())
+        draft = c.prepare_product('100ml', OAT, P_ID, 'Synthetic ml')['payload']
+        c.create_private_product(draft)
+        payload = c.prepare_consumed(C_ID, P_ID, 50, 'ml', self.WHEN, 'snack', 'ml')['payload']
+        c.create_consumed(payload, base_unit='ml')
+        c.delete_consumed(C_ID, '2026-07-01', base_unit='ml')
+        with self.assertRaises(ny.ContractUnverified):
+            c.create_consumed(payload)  # default means g, not last-proved ml
+
+    def test_truthy_callback_is_not_salt_display_confirmation(self):
+        c = self.script()
+        rec = c.run_write_probe(consent=True, amount=1, base_unit='ml', when=self.WHEN,
+                                salt_display=lambda q: 'yes')
+        self.assertFalse(rec['salt']['display_confirmed_by_user'])
+        self.assertFalse(c.salt_confirmed('ml'))
+
+    def test_g_salt_proof_does_not_unblock_ml_payload_or_read_mapping(self):
+        self.install_contract(salt_display=True)
+        c = self.client((200, remote_product()))
+        self.assertNotIn('salt_g', c.get_product(P_ID)['per_unit'])
+        draft = c.prepare_product('100ml', OAT, P_ID, 'Synthetic')
+        self.assertIn('salt_g', draft['local_only'])
+        with self.assertRaises(ny.ContractUnverified):
+            c.create_private_product(draft['payload'])
+        payload = c.prepare_consumed(C_ID, P_ID, 1, 'ml', self.WHEN, 'snack', 'ml')['payload']
+        with self.assertRaises(ny.ContractUnverified):
+            c.create_consumed(payload, base_unit='ml')
+        self.assertEqual(len(self.t.calls), 1)
+
+
 
 class ProbeRecovery(LoggedIn):
     WHEN = utc(2026, 7, 1, 10, 30)
@@ -1132,6 +1253,16 @@ class ProbeRecovery(LoggedIn):
 
 
 class CLI(Isolated):
+    def test_verify_write_explicit_ml_reaches_probe_and_prints_ml_consent(self):
+        self.logged_in()
+        rec = ny.contract_record(probe_results(base_unit='ml'), '2026-07-01T12:31:00+02:00')
+        with mock.patch.object(ny.Client, 'run_write_probe', return_value=rec) as probe:
+            code, out = self.run_cli(['verify-write', '--base-unit', 'ml', '--amount', '1',
+                                     '--i-consent-to-test-writes'], transport=FakeTransport(), inputs=['WRITE'])
+        self.assertEqual(code, 0, out)
+        self.assertEqual(probe.call_args.kwargs['base_unit'], 'ml')
+        self.assertIn('1 ml', out)
+
     def run_cli(self, argv, transport=None, tty=True, inputs=(), secrets=()):
         out = io.StringIO()
         inputs, secrets = list(inputs), list(secrets)

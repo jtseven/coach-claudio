@@ -42,7 +42,7 @@ class Fake:
         self.products[p['id']] = p
         return {'status': 'confirmed'}
 
-    def create_consumed(self, p):
+    def create_consumed(self, p, *, base_unit='g'):
         cid = p['products'][0]['id']
         self.calls.append(('consumed', cid))
         self.consumed[cid] = p['products'][0]
@@ -54,7 +54,7 @@ class Fake:
     def get_consumed(self, day):
         return {'products': list(self.consumed.values()), 'recipe_portions': [], 'simple_products': []}
 
-    def delete_consumed(self, cid, day):
+    def delete_consumed(self, cid, day, *, base_unit='g'):
         self.calls.append(('delete', cid))
         self.consumed.pop(cid, None)
         if self.fail == 'delete':
@@ -181,6 +181,48 @@ class SyncTests(unittest.TestCase):
         self.assertIn('missing amount', str(result))
         self.assertFalse(self.fake.calls)
 
+    def test_per_unit_contract_syncs_g_and_ml_without_density(self):
+        old_caps = self.fake.capabilities()
+        self.fake.capabilities = lambda: {**old_caps, 'by_base_unit': {
+            unit: {**old_caps, 'base_unit': unit} for unit in ('g', 'ml')}}
+        self.entry(items=[{'name': 'Synthetic drink', 'amount': '0.33 l', 'basis': '100ml',
+                           'nutrients': {'energy_kcal': 30, 'salt_g': 0.1},
+                           'provenance': {'kind': 'user'}},
+                          {'name': 'Synthetic food', 'amount': '50 g', 'basis': '100g',
+                           'nutrients': {'energy_kcal': 200, 'salt_g': 0.2},
+                           'provenance': {'kind': 'user'}}])
+        before = self.ledger.read_bytes()
+        self.assertEqual(self.engine().run()['synced'], 1)
+        self.assertEqual(sorted(p['base_unit'] for p in self.fake.products.values()), ['g', 'ml'])
+        self.assertEqual(sorted(p['amount'] for p in self.fake.consumed.values()), [50, 330])
+        self.assertEqual(self.ledger.read_bytes(), before)
+
+    def test_per_unit_salt_display_proof_is_required_even_with_lenient_adapter(self):
+        old_caps = self.fake.capabilities()
+        ml = {**old_caps, 'base_unit': 'ml', 'nutrients': {
+            **old_caps['nutrients'], 'salt_g': 'unverified'}}
+        self.fake.capabilities = lambda: {**old_caps, 'by_base_unit': {'g': old_caps, 'ml': ml}}
+        self.entry(items=[{'name': 'Synthetic drink', 'amount': '330 ml', 'basis': '100ml',
+                          'nutrients': {'energy_kcal': 30, 'salt_g': 0.1},
+                          'provenance': {'kind': 'user'}}])
+        before = self.ledger.read_bytes()
+        self.assertEqual(self.engine().run()['blocked'], 1)
+        self.assertFalse(self.fake.calls)
+        self.assertEqual(self.ledger.read_bytes(), before)
+
+    def test_delete_does_not_fall_back_to_other_unit_proof(self):
+        old_caps = self.fake.capabilities()
+        ml = {**old_caps, 'base_unit': 'ml'}
+        self.fake.capabilities = lambda: {**old_caps, 'by_base_unit': {'g': old_caps, 'ml': ml}}
+        self.entry(items=[{'name': 'Synthetic drink', 'amount': '330 ml', 'basis': '100ml',
+                          'nutrients': {'energy_kcal': 30}, 'provenance': {'kind': 'user'}}])
+        s = self.engine()
+        self.assertEqual(s.run()['synced'], 1)
+        self.entry(2, 'erased')
+        self.fake.capabilities = lambda: {**old_caps, 'by_base_unit': {'g': old_caps}}
+        self.assertEqual(s.run()['blocked'], 1)
+        self.assertEqual(len(self.fake.consumed), 1)
+
     def test_estimated_total_with_real_quantity_scales(self):
         self.entry(items=[{'name': 'Estimated plate', 'basis': {'per': 'total'},
                           'amount': '250 g', 'nutrients': {'energy_kcal': 500},
@@ -261,7 +303,7 @@ class SyncTests(unittest.TestCase):
 
     def test_http_success_without_readback_is_unknown(self):
         self.entry()
-        self.fake.create_consumed = lambda p: {'status': 'confirmed', 'http_status': 204}
+        self.fake.create_consumed = lambda p, **kw: {'status': 'confirmed', 'http_status': 204}
         result = self.engine().run()
         self.assertEqual(result['unknown'], 1)
         self.assertEqual(result['synced'], 0)

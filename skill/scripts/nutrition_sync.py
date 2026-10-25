@@ -130,16 +130,23 @@ class Sync:
         if per != 'total' and per != '100' + unit:
             raise ValueError('amount/basis dimension mismatch: no implicit ml-to-g conversion')
         caps = client.capabilities()
+        if 'by_base_unit' in caps:
+            caps = caps['by_base_unit'].get(unit, {})
+        if caps.get('base_unit') != unit:
+            raise ny.ContractUnverified('base unit ' + unit + ' is not live_confirmed (no assumed density)')
         for op in ('create_private_product', 'create_consumed'):
             if caps.get(op) != 'live_confirmed':
                 raise ny.ContractUnverified(op + ' is not live_confirmed; run nutrition_yazio.py verify-write')
-        if caps.get('base_unit') != unit:
-            raise ny.ContractUnverified('base unit ' + unit + ' is not live_confirmed (no assumed density)')
         nutrients, trace = core.parse_nutrients(raw.get('nutrients'), [])
         if trace:
             raise ValueError('qualified/trace nutrients cannot be exported as exact values: ' + ', '.join(trace))
         factor = 100 / amount if per == 'total' else 1
         nutrients = {k: None if v is None else float(v) * factor for k, v in nutrients.items()}
+        unverified = [k for k, v in nutrients.items() if v is not None
+                      and caps.get('nutrients', {}).get(k) != 'live_confirmed']
+        if unverified:
+            raise ny.ContractUnverified('known nutrients not live-confirmed for ' + unit + ': '
+                                        + ', '.join(unverified))
         product = client.prepare_product('100' + unit, nutrients, job['pid'], computed['name'], raw.get('brand'))
         if product.get('local_only'):
             raise ny.ContractUnverified('known nutrients not live-confirmed: ' + ', '.join(product['local_only']))
@@ -156,7 +163,9 @@ class Sync:
             self.update(db, job, product=product, consumed=consumed, day=day)
         for phase, reconcile, create, payload, next_phase in (
             ('product', client.reconcile_product, client.create_private_product, job['product'], 'consumed'),
-            ('consumed', client.reconcile_consumed, client.create_consumed, job['consumed'], 'done')):
+            ('consumed', client.reconcile_consumed,
+             lambda draft: client.create_consumed(draft, base_unit=json.loads(job['product'])['base_unit']),
+             job['consumed'], 'done')):
             if job['phase'] != phase:
                 continue
             draft = json.loads(payload)
@@ -179,12 +188,16 @@ class Sync:
             if payload and reconcile(json.loads(payload))['status'] not in ('absent', 'confirmed'):
                 raise ny.UnknownOutcome('reconcile superseded', job['cid'], job['day'])
         if job['day']:
-            if client.capabilities().get('delete_consumed') != 'live_confirmed':
+            unit = json.loads(job['product'])['base_unit']
+            caps = client.capabilities()
+            if 'by_base_unit' in caps:
+                caps = caps['by_base_unit'].get(unit, {})
+            if caps.get('base_unit') != unit or caps.get('delete_consumed') != 'live_confirmed':
                 raise ny.ContractUnverified('delete_consumed is not live_confirmed; correction/deletion blocked')
             self.update(db, job, phase='deleting', state='unknown', reason='deletion awaiting readback')
             exists = any(x['id'] == job['cid'] for x in client.get_consumed(job['day'])['products'])
             if exists:
-                client.delete_consumed(job['cid'], job['day'])
+                client.delete_consumed(job['cid'], job['day'], base_unit=unit)
             if any(x['id'] == job['cid'] for x in client.get_consumed(job['day'])['products']):
                 raise ny.UnknownOutcome('delete_consumed', job['cid'], job['day'], 'still present')
         self.update(db, job, phase='retired', state='synced', reason='', snapshot=None, product=None, consumed=None)
