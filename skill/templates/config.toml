@@ -80,6 +80,7 @@ language = "de"              # ISO 639-1 for product names
 contact = ""                 # optional e-mail/URL in the User-Agent, as Open Food Facts asks
 lookup_timeout_s = 10        # per request, at most 30
 offline = false              # true = cached products only, never the network
+yazio_omit_salt = false      # explicit export-only omission; local salt is retained
 
 [activities]
 # Strava sport types that are commuting, not training: never counted,

@@ -45,6 +45,37 @@ nutrition_yazio = true
 Both default to false. Missing/false/non-boolean values cannot authorize sync.
 Logging and any provider lookup remain independent of YAZIO export.
 
+### Optional export without salt
+
+If you deliberately do not need salt in YAZIO, merge this into your private
+`[nutrition]` table:
+
+```toml
+[nutrition]
+yazio_omit_salt = true
+```
+
+The default is `false`; only the literal boolean `true` opts in (not `"true"`
+or `1`). This omits **only canonical `salt_g`** from new export drafts, for both
+g and ml, including salt derived from sodium. Salt traces alone then no longer
+block export. Every other qualified/trace value and every remaining nutrient,
+operation and per-unit capability gate stays unchanged. No fake salt zero is
+sent and no account salt capability is marked verified. Known local salt,
+all seven local nutrients, receipts and immutable outbox snapshots are retained.
+
+JSON status includes top-level `omitted_nutrients: ["salt_g"]` when configured;
+this describes the current policy, even if a food has no known salt. Each
+prepared job also persists its policy, exposed in the entry's `omissions` list
+with revision and item index. These notices do not turn a confirmed export into
+a failure: `synced` under this policy means the exported subset, **not salt**.
+Persisted notices remain visible after disabling the option.
+
+Already-prepared/in-flight or completed jobs are not rewritten or re-exported
+when the setting changes. Retries use the original immutable draft and its
+recorded omission policy. A blocked job without a draft can retry with the new
+setting. This option neither activates sync nor installs a scheduler; both
+integration flags and the normal explicit run are still required.
+
 ```sh
 python3 skill/scripts/nutrition_sync.py status
 COACH_DRY_RUN=1 python3 skill/scripts/nutrition_sync.py run
@@ -93,7 +124,8 @@ created per local item revision; there is no branded/shared-product mutation.
 
 - Canonical energy, protein, available carbohydrate, fat, fiber, sugars and salt
   are passed to `prepare_product`; the adapter maps per-100 values to per-base-unit
-  fields. Unknown nutrients stay unknown, never zero.
+  fields. The explicit option above excludes only salt from that export copy.
+  Unknown nutrients stay unknown, never zero.
 - `100g` and `100ml` snapshots require an explicit eaten quantity of the same
   dimension. Mass/volume unit conversions use the core's deterministic tables.
   No ml→g density assumption or guessed serving size is made.
@@ -105,9 +137,10 @@ created per local item revision; there is no branded/shared-product mutation.
   encode local confidence/ranges.
 - Serving-basis snapshots and serving counts are blocked; resolve to an explicit
   g/ml amount and supported basis locally. Qualified/trace nutrient values are
-  blocked rather than flattened to exact numbers (including false zero).
+  blocked rather than flattened to exact numbers (including false zero), except
+  deliberately omitted salt when `yazio_omit_salt = true`.
 - No configured client, researched/unverified operation, mismatching base-unit
-  capability, unaccepted known nutrients, unverified salt, and ambiguous DST wall
+  capability, unaccepted known nutrients, unverified non-omitted salt, and ambiguous DST wall
   times remain blocked with the adapter/core reason. There is no seven-nutrient
   export claim when the account only accepts some of them.
 - The runner selects `by_base_unit` capabilities using each item's actual g/ml
@@ -176,5 +209,6 @@ binding, so an account switch cannot prove absence in the original account.
 For an optional parent CLI wrapper, call `nutrition_sync.main(['status'])` or
 `nutrition_sync.main(['run'])`. It reads the same configuration gates and returns
 an exit code. Code callers can inject `Sync(directory, client_factory=...,
-enabled=explicit_boolean, dry_run=...)`; its default is disabled. The standalone
+enabled=explicit_boolean, dry_run=..., omit_salt=explicit_boolean)`; sync and salt
+omission both default to false. The standalone
 CLI does not depend on a parent wrapper being installed.

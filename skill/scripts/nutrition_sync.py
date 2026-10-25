@@ -15,11 +15,12 @@ import nutrition_yazio as ny
 
 
 class Sync:
-    def __init__(self, directory, client_factory=None, enabled=False, dry_run=False):
+    def __init__(self, directory, client_factory=None, enabled=False, dry_run=False, omit_salt=False):
         self.directory = Path(directory)
         self.path = self.directory / 'sync_outbox.sqlite3'
         self.client_factory = client_factory or ny.Client.load
         self.enabled, self.dry_run = enabled, dry_run
+        self.omit_salt = omit_salt is True
 
     def latest(self):
         path = self.directory / 'ledger.sqlite3'
@@ -59,8 +60,12 @@ class Sync:
                 state = 'pending'
             counts[state] += 1
             details.append({'entry_id': entry['id'], 'rev': entry['rev'], 'state': state,
+                            'omissions': [{'rev': j['rev'], 'item': j['item'],
+                                           'omitted_nutrients': json.loads(j['omitted_nutrients'])}
+                                          for j in relevant if j.get('omitted_nutrients', '[]') != '[]'],
                             'reasons': sorted({j['reason'] for j in relevant if j['reason']})})
-        return {**counts, 'enabled': self.enabled, 'dry_run': self.dry_run, 'entries': details}
+        return {**counts, 'enabled': self.enabled, 'dry_run': self.dry_run,
+                'omitted_nutrients': ['salt_g'] if self.omit_salt else [], 'entries': details}
 
     @contextmanager
     def locked(self):
@@ -84,6 +89,8 @@ class Sync:
                            'pid TEXT, cid TEXT, product TEXT, consumed TEXT, day TEXT, '
                            'phase TEXT, state TEXT, reason TEXT, '
                            'PRIMARY KEY(entry_id,rev,item))')
+                if 'omitted_nutrients' not in {r['name'] for r in db.execute('PRAGMA table_info(jobs)')}:
+                    db.execute("ALTER TABLE jobs ADD COLUMN omitted_nutrients TEXT NOT NULL DEFAULT '[]'")
                 yield db
         finally:
             os.close(fd)
@@ -104,7 +111,9 @@ class Sync:
                 inp = json.loads(e['payload'])['input']
                 for i, item in enumerate(inp['items']):
                     snapshot = json.dumps({'item': item, 'when': inp['eaten_at'], 'meal': inp['meal']})
-                    db.execute('INSERT OR IGNORE INTO jobs VALUES (?,?,?,?,?,?,NULL,NULL,NULL,?,?,?)',
+                    db.execute('INSERT OR IGNORE INTO jobs '
+                               '(entry_id,rev,item,snapshot,pid,cid,product,consumed,day,phase,state,reason) '
+                               'VALUES (?,?,?,?,?,?,NULL,NULL,NULL,?,?,?)',
                                (e['id'], e['rev'], i, snapshot, str(uuid.uuid4()), str(uuid.uuid4()),
                                 'product', 'pending', ''))
             db.execute('COMMIT')
@@ -138,6 +147,11 @@ class Sync:
             if caps.get(op) != 'live_confirmed':
                 raise ny.ContractUnverified(op + ' is not live_confirmed; run nutrition_yazio.py verify-write')
         nutrients, trace = core.parse_nutrients(raw.get('nutrients'), [])
+        # Export policy only: parsing canonicalizes sodium to salt, while the
+        # immutable local item/snapshot and account capability proof stay intact.
+        if self.omit_salt:
+            nutrients = {k: v for k, v in nutrients.items() if k != 'salt_g'}
+            trace = [k for k in trace if k != 'salt_g']
         if trace:
             raise ValueError('qualified/trace nutrients cannot be exported as exact values: ' + ', '.join(trace))
         factor = 100 / amount if per == 'total' else 1
@@ -160,7 +174,8 @@ class Sync:
     def advance(self, db, client, job):
         if not job['product']:
             product, consumed, day = self.prepare(client, job)
-            self.update(db, job, product=product, consumed=consumed, day=day)
+            self.update(db, job, product=product, consumed=consumed, day=day,
+                        omitted_nutrients=json.dumps(['salt_g'] if self.omit_salt else []))
         for phase, reconcile, create, payload, next_phase in (
             ('product', client.reconcile_product, client.create_private_product, job['product'], 'consumed'),
             ('consumed', client.reconcile_consumed,
@@ -256,7 +271,8 @@ def main(argv=None):
     import coachconf as cc
     sync = Sync(cc.NUTRITION_DIR, enabled=cc.get('integrations.nutrition_log', False) is True and
                 cc.get('integrations.nutrition_yazio', False) is True,
-                dry_run=cc.DRY_RUN or os.environ.get('COACH_DRY_RUN') == '1')
+                dry_run=cc.DRY_RUN or os.environ.get('COACH_DRY_RUN') == '1',
+                omit_salt=cc.get('nutrition.yazio_omit_salt', False) is True)
     try:
         result = sync.run() if args.command == 'run' else sync.status()
         print(json.dumps(result, indent=2))

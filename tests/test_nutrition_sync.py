@@ -334,6 +334,150 @@ class SyncTests(unittest.TestCase):
                           'nutrients': {'energy_kcal': 200}, 'provenance': {'kind': 'user'}}])
         self.assertEqual(self.engine().run()['synced'], 1)
 
+    def test_omit_salt_exports_six_nutrients_without_mutating_real_ledger(self):
+        from datetime import timezone
+        import nutrition_store
+        self.ledger.unlink()
+        ledger = nutrition_store.Ledger(self.ledger, timezone.utc)
+        self.addCleanup(ledger.close)
+        caps = self.fake.capabilities()
+        caps['nutrients']['salt_g'] = 'unverified'
+        self.fake.capabilities = lambda: {'by_base_unit': {
+            unit: {**caps, 'base_unit': unit} for unit in ('g', 'ml')}}
+        received = []
+        def prepare(per, nutrients, pid, name, producer=None):
+            received.append(dict(nutrients))
+            return ny.prepare_product(per, nutrients, pid, name, category='synthetic',
+                                      base_units=['g', 'ml'], salt_write=False)
+        self.fake.prepare_product = prepare
+        nutrients = {'energy_kcal': 200, 'protein_g': 8, 'carbohydrate_g': 20,
+                     'fat_g': 9, 'fiber_g': 3, 'sugars_g': 5, 'salt_g': 0.2}
+        logged = ledger.add({'eaten_at': '2026-01-01T12:00:00+00:00', 'meal': 'lunch',
+                             'items': [{'name': 'Synthetic ' + unit, 'basis': '100' + unit,
+                                        'amount': '50 ' + unit, 'nutrients': nutrients,
+                                        'provenance': {'kind': 'user'}} for unit in ('g', 'ml')]})
+        before = self.ledger.read_bytes()
+        self.assertIn('salt', logged['entry']['receipt'])
+        self.assertEqual(self.engine().run()['blocked'], 1)
+        self.assertFalse(self.fake.calls)
+        result = self.engine(omit_salt=True).run()
+        self.assertEqual(result['synced'], 1, result)
+        self.assertEqual(result['omitted_nutrients'], ['salt_g'])
+        self.assertEqual(len(received), 2)
+        for values in received:
+            self.assertEqual(set(values), set(nutrients) - {'salt_g'})
+        for product in self.fake.products.values():
+            self.assertEqual(set(product['nutrients']),
+                             {ny.NUTRIENT_KEYS[k] for k in nutrients if k != 'salt_g'})
+        self.assertEqual(self.ledger.read_bytes(), before)
+        local = ledger.get(logged['entry']['id'])
+        self.assertEqual(local, logged['entry'])
+        self.assertEqual(set(local['totals']), set(nutrients))
+        self.assertEqual(local['totals']['salt_g']['value'], 0.2)
+        self.assertEqual(caps['nutrients']['salt_g'], 'unverified')
+        with sqlite3.connect(self.engine().path) as db:
+            for (snapshot,) in db.execute('SELECT snapshot FROM jobs'):
+                self.assertEqual(json.loads(snapshot)['item']['nutrients'], nutrients)
+        # Persisted omissions stay visible even when a later status uses defaults.
+        status = self.engine().status()
+        self.assertEqual(status['entries'][0]['omissions'], [
+            {'rev': 1, 'item': i, 'omitted_nutrients': ['salt_g']} for i in range(2)])
+
+    def test_omit_salt_filters_canonical_sodium_and_only_salt_traces(self):
+        import uuid
+        for nutrient, value, blocked in (('salt_g', '<0.5', False),
+                                         ('sodium_mg', '<100', False),
+                                         ('sodium_g', 0.1, False),
+                                         ('sodium_mg', 100, False),
+                                         ('protein_g', '<2', True),
+                                         ('energy_kcal', '<200', True),
+                                         ('carbohydrate_total_g', '<10', True),
+                                         ('fiber_g', '<1', True),
+                                         ('sugars_g', '<1', True),
+                                         ('fat_g', '<1', True)):
+            with self.subTest(nutrient=nutrient, value=value):
+                raw = {'name': 'Synthetic trace', 'amount': '50 g', 'basis': '100g',
+                       'nutrients': {'energy_kcal': 200, 'carbohydrate_g': 20,
+                                     'salt_g': '<0.5', nutrient: value},
+                       'provenance': {'kind': 'user'}}
+                if nutrient.startswith('sodium'):
+                    del raw['nutrients']['salt_g']
+                job = {'pid': str(uuid.uuid4()), 'cid': str(uuid.uuid4()),
+                       'snapshot': json.dumps({'item': raw, 'when': '2026-01-01T12:00:00+00:00',
+                                               'meal': 'lunch'})}
+                engine = self.engine(omit_salt=True)
+                if blocked:
+                    with self.assertRaisesRegex(ValueError, 'trace'):
+                        engine.prepare(self.fake, job)
+                else:
+                    product, _, _ = engine.prepare(self.fake, job)
+                    self.assertNotIn(ny.NUTRIENT_KEYS['salt_g'], json.loads(product)['nutrients'])
+
+    def test_omit_salt_keeps_other_unit_nutrient_and_operation_gates(self):
+        self.entry(items=[{'name': 'Synthetic food', 'amount': '50 g', 'basis': '100g',
+                          'nutrients': {'energy_kcal': 200, 'protein_g': 8, 'salt_g': 0.2},
+                          'provenance': {'kind': 'user'}}])
+        caps = self.fake.capabilities()
+        self.fake.capabilities = lambda: caps
+        for key in ('protein_g', 'energy_kcal'):
+            with self.subTest(key=key):
+                caps['nutrients'][key] = 'unverified'
+                result = self.engine(omit_salt=True).run()
+                self.assertEqual(result['blocked'], 1)
+                self.assertIn(key, str(result))
+                self.assertFalse(self.fake.calls)
+                caps['nutrients'][key] = 'live_confirmed'
+        self.fake.live = False
+        caps['create_consumed'] = 'researched'
+        self.assertEqual(self.engine(omit_salt=True).run()['blocked'], 1)
+        self.assertFalse(self.fake.calls)
+        caps['create_consumed'] = 'live_confirmed'
+        caps['base_unit'] = 'ml'
+        self.assertEqual(self.engine(omit_salt=True).run()['blocked'], 1)
+        self.assertFalse(self.fake.calls)
+
+    def test_omit_salt_direct_engine_requires_literal_true(self):
+        self.entry(items=[{'name': 'Synthetic food', 'amount': '50 g', 'basis': '100g',
+                          'nutrients': {'energy_kcal': 200, 'salt_g': 0.2},
+                          'provenance': {'kind': 'user'}}])
+        caps = self.fake.capabilities()
+        caps['nutrients']['salt_g'] = 'unverified'
+        self.fake.capabilities = lambda: caps
+        for value in (False, 'true', 1, None):
+            with self.subTest(value=value):
+                result = self.engine(omit_salt=value).run()
+                self.assertEqual(result['blocked'], 1)
+                self.assertEqual(result['omitted_nutrients'], [])
+                self.assertFalse(self.fake.calls)
+
+    def test_omit_salt_notice_survives_unknown_retry_with_config_disabled(self):
+        self.entry()
+        engine = self.engine(omit_salt=True)
+        self.fake.fail = 'lost'
+        self.assertEqual(engine.run()['unknown'], 1)
+        with sqlite3.connect(engine.path) as db:
+            before = db.execute('SELECT product,omitted_nutrients FROM jobs').fetchone()
+        result = self.engine().run()
+        self.assertEqual(result['synced'], 1)
+        self.assertEqual(result['omitted_nutrients'], [])
+        self.assertEqual(result['entries'][0]['omissions'], [
+            {'rev': 1, 'item': 0, 'omitted_nutrients': ['salt_g']}])
+        with sqlite3.connect(engine.path) as db:
+            self.assertEqual(db.execute('SELECT product,omitted_nutrients FROM jobs').fetchone(), before)
+
+    def test_legacy_outbox_status_is_read_only_and_run_migrates_omissions(self):
+        self.entry()
+        engine = self.engine()
+        self.assertEqual(engine.run()['synced'], 1)
+        with sqlite3.connect(engine.path) as db:
+            db.execute('ALTER TABLE jobs DROP COLUMN omitted_nutrients')
+        before = engine.path.read_bytes()
+        self.assertEqual(engine.status()['entries'][0]['omissions'], [])
+        self.assertEqual(engine.path.read_bytes(), before)
+        self.assertEqual(self.engine(omit_salt=True).run()['synced'], 1)
+        with sqlite3.connect(engine.path) as db:
+            self.assertEqual(db.execute('SELECT omitted_nutrients FROM jobs').fetchone(), ('[]',))
+
     def test_real_store_snapshot_and_tombstone_contract(self):
         from datetime import timezone
         import nutrition_store
