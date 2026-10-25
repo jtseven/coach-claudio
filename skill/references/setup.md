@@ -263,6 +263,12 @@ the phone (home Wi-Fi only, Tailscale, or a reverse proxy). Generate
 rendered crontab), and have them press "Export now". `health.py summary`
 should then show data.
 
+**Food log (optional, off by default).** Only if they want to log meals by
+photo, label, barcode or text: set `integrations.nutrition_log = true` and,
+outside Germany, `[nutrition] country`/`language`. Details and privacy in
+`docs/nutrition-tracking.md`. Don't suggest it to someone who doesn't track
+food.
+
 **Voice notes** and the **weekly charts** are optional extras, also in
 `docs/deployment.md`. The charts need `uv` on the machine;
 `doctor.py` says whether it's there.

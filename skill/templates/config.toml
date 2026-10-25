@@ -70,6 +70,16 @@ apple_health = false         # sleep, HRV, resting HR via Health Auto Export (iP
 telegram = false             # chat + scheduled check-ins on your phone
 voice = false                # transcribe Telegram voice notes locally (whisper.cpp)
 weekly_chart = false         # PNG charts with the weekly close-out (needs uv)
+nutrition_log = false        # log meals from photos, labels, barcodes, text (docs/nutrition-tracking.md)
+nutrition_yazio = false      # unofficial export: secure setup and live verification required
+
+[nutrition]
+# Only used with nutrition_log on. Product lookups go to Open Food Facts.
+country = "de"               # ISO 3166-1 alpha-2 for lookups, or "world"
+language = "de"              # ISO 639-1 for product names
+contact = ""                 # optional e-mail/URL in the User-Agent, as Open Food Facts asks
+lookup_timeout_s = 10        # per request, at most 30
+offline = false              # true = cached products only, never the network
 
 [activities]
 # Strava sport types that are commuting, not training: never counted,

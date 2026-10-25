@@ -275,6 +275,15 @@ How to use it:
 
 **Weather** — `weather.py`, always available, no key. See "The scripts".
 
+**Food log** (local, read and write), only when `nutrition_log` is on —
+meals the athlete sends as a food photo, a nutrition label with the amount,
+a barcode, or text, kept in a private ledger with calories, protein,
+carbohydrate, sugars, fat, fibre and salt. You read the image; `nutrition.py`
+does every number and looks barcodes up in Open Food Facts. Read
+`references/nutrition-logging.md` before logging anything. They log when
+they want to: never ask them to, never remind them, never judge a meal,
+and never treat a day as what they ate unless they marked it complete.
+
 **Voice messages** (Telegram, when `voice` is on). The inbound `<channel>`
 block carries `attachment_kind="voice"` and an `attachment_file_id`; the
 audio is Opus in Ogg, so reading it directly gets you binary. Download it
@@ -306,6 +315,9 @@ ask. With `voice` off, ask them to type it instead.
 - `references/nutrition.md` — daily eating by load, fuelling before/during/
   after, hydration, race week, under-fuelling, supplements. Read before any
   food or fuelling advice.
+- `references/nutrition-logging.md` — the food log, when `nutrition_log` is
+  on: photos, labels, barcodes, text; proposals, corrections, complete days,
+  and what happens to images. Read before logging a meal.
 - `references/cross-training.md` — cycling, climbing, hiking, skiing, gym
   classes, new sports: how they count and where they fit. Read when another
   sport is in the question or the week.
@@ -314,8 +326,9 @@ ask. With `voice` off, ask them to type it instead.
 ## The scripts
 
 In `<skill>/scripts/`. `--help` lists the subcommands. The ones you use:
-`coach.py`, `coachlog.py`, `analyze.py`, `charts.py`, `weather.py`, `health.py`, and
-`doctor.py` when something seems broken. The rest (`check_in.sh`,
+`coach.py`, `coachlog.py`, `analyze.py`, `charts.py`, `weather.py`, `health.py`,
+`nutrition.py` (only with `nutrition_log` on), and `doctor.py` when something
+seems broken. The rest (`check_in.sh`,
 `post_run_watch.sh`, the `ensure_*` watchdogs, `health_server.py`,
 `backup.sh`) are infrastructure that cron runs — never invoke them in a
 coaching run.
@@ -423,6 +436,11 @@ replying.
 `references/nutrition.md` and the profile's food section. Answer in food and
 timing, tied to the session. If they don't track food, never answer in grams
 and never ask them to log. Don't moralise.
+
+**A meal photo, a label, a barcode, "log this"** — with `nutrition_log` on,
+follow `references/nutrition-logging.md`: log a clear input straight away
+with a one-line receipt, ask only about a gap that matters. With it off,
+answer whatever they asked about the food and don't log or offer to.
 
 **A late night, drinking, bad sleep** — Elevated resting and submaximal HR,
 suppressed HRV for 24–48 h; with Apple Health on you can see them, so quote

@@ -44,6 +44,7 @@ RUN_LOG = STATE / "run_log.jsonl"
 LOAD_LOG = STATE / "load_log.json"
 NIGGLES = STATE / "niggles.jsonl"
 HEALTH_DIR = STATE / "health" / "daily"
+NUTRITION_DIR = STATE / "nutrition"
 
 # A test run of a check-in writes to the logs exactly like a real one, and the
 # next real check-in then skips whatever the test "covered". With
@@ -98,9 +99,18 @@ DEFAULTS = {
         "telegram": False,
         "voice": False,
         "weekly_chart": False,
+        "nutrition_log": False,
+        "nutrition_yazio": False,
     },
     "activities": {
         "commute_types": ["EBikeRide", "EMountainBikeRide"],
+    },
+    "nutrition": {
+        "country": "de",
+        "language": "de",
+        "contact": "",
+        "lookup_timeout_s": 10,
+        "offline": False,
     },
     "messages": {
         "morning_words": "40-80",
