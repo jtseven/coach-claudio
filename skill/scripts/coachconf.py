@@ -111,6 +111,7 @@ DEFAULTS = {
         "contact": "",
         "lookup_timeout_s": 10,
         "offline": False,
+        "yazio_omit_salt": False,
     },
     "messages": {
         "morning_words": "40-80",
