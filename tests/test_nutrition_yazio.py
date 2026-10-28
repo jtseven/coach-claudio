@@ -451,9 +451,23 @@ class ProductPayload(unittest.TestCase):
         self.assertIn('salt_g', r['synced'])
 
     def test_ml_basis_uses_ml_base_unit(self):
-        r = self.prep({'energy_kcal': 46, 'carbohydrate_g': 6.7}, per='100ml')
+        r = self.prep({'energy_kcal': 46, 'carbohydrate_g': 6.7, 'fat_g': 0.1}, per='100ml')
         self.assertEqual(r['payload']['base_unit'], 'ml')
         self.assertEqual(r['payload']['nutrients']['nutrient.carb'], 0.067)
+
+    def test_unknown_fat_is_refused_not_sent_as_zero(self):
+        # YAZIO answers HTTP 400 without fat; below-LOD fat stays unknown locally.
+        with self.assertRaisesRegex(ValueError, 'fat_g required'):
+            self.prep({'energy_kcal': 41, 'carbohydrate_g': 8.5, 'fat_g': None})
+
+    def test_readback_accepts_yazio_six_decimal_storage_only(self):
+        payload = self.prep({'energy_kcal': 600 / 3.5, 'fat_g': 20 / 3.5,
+                             'carbohydrate_g': 75 / 3.5})['payload']
+        stored = {k: round(v, 6) for k, v in payload['nutrients'].items()}
+        remote = {**payload, 'nutrients': stored}
+        self.assertEqual(ny.compare_product(payload, remote)[0], [])
+        remote['nutrients'] = {**stored, 'nutrient.fat': stored['nutrient.fat'] + 2e-6}
+        self.assertEqual(ny.compare_product(payload, remote)[0], ['fat_g'])
 
     def test_only_canonical_keys_no_kj_or_sodium_duplicates(self):
         for extra in ({'energy_kj': 3700}, {'sodium_mg': 4}, {'carbs': 1}):

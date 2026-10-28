@@ -39,6 +39,9 @@ class Fake:
 
     def create_private_product(self, p):
         self.calls.append(('product', p['id']))
+        if self.fail == 'refuse':
+            self.fail = None
+            raise ny.YazioHTTPError(400, None, 'create_private_product')
         self.products[p['id']] = p
         return {'status': 'confirmed'}
 
@@ -79,7 +82,7 @@ class SyncTests(unittest.TestCase):
 
     def entry(self, rev=1, state='active', items=None):
         item = {'name': 'Synthetic oats', 'amount': '50 g', 'basis': {'per': '100g'},
-                'nutrients': {'energy_kcal': 200, 'protein_g': 8},
+                'nutrients': {'fat_g': 1, 'energy_kcal': 200, 'protein_g': 8},
                 'provenance': {'kind': 'provider', 'provider': 'synthetic'}}
         payload = {'input': {'items': items if items is not None else [item],
                             'eaten_at': '2026-01-01T12:00:00+00:00', 'meal': 'lunch'}}
@@ -170,9 +173,9 @@ class SyncTests(unittest.TestCase):
 
     def test_ml_and_missing_photo_quantity_block_exactly(self):
         items = [{'name': 'Synthetic drink', 'amount': '330 ml', 'basis': {'per': '100ml'},
-                  'nutrients': {'energy_kcal': 30}, 'provenance': {'kind': 'user'}},
+                  'nutrients': {'fat_g': 1, 'energy_kcal': 30}, 'provenance': {'kind': 'user'}},
                  {'name': 'Photo estimate', 'basis': {'per': 'total'},
-                  'nutrients': {'energy_kcal': 500}, 'provenance': {'kind': 'estimate',
+                  'nutrients': {'fat_g': 1, 'energy_kcal': 500}, 'provenance': {'kind': 'estimate',
                   'confidence': 0.5, 'uncertainty': 'unknown portion'}}]
         self.entry(items=items)
         result = self.engine().run()
@@ -186,10 +189,10 @@ class SyncTests(unittest.TestCase):
         self.fake.capabilities = lambda: {**old_caps, 'by_base_unit': {
             unit: {**old_caps, 'base_unit': unit} for unit in ('g', 'ml')}}
         self.entry(items=[{'name': 'Synthetic drink', 'amount': '0.33 l', 'basis': '100ml',
-                           'nutrients': {'energy_kcal': 30, 'salt_g': 0.1},
+                           'nutrients': {'fat_g': 1, 'energy_kcal': 30, 'salt_g': 0.1},
                            'provenance': {'kind': 'user'}},
                           {'name': 'Synthetic food', 'amount': '50 g', 'basis': '100g',
-                           'nutrients': {'energy_kcal': 200, 'salt_g': 0.2},
+                           'nutrients': {'fat_g': 1, 'energy_kcal': 200, 'salt_g': 0.2},
                            'provenance': {'kind': 'user'}}])
         before = self.ledger.read_bytes()
         self.assertEqual(self.engine().run()['synced'], 1)
@@ -203,7 +206,7 @@ class SyncTests(unittest.TestCase):
             **old_caps['nutrients'], 'salt_g': 'unverified'}}
         self.fake.capabilities = lambda: {**old_caps, 'by_base_unit': {'g': old_caps, 'ml': ml}}
         self.entry(items=[{'name': 'Synthetic drink', 'amount': '330 ml', 'basis': '100ml',
-                          'nutrients': {'energy_kcal': 30, 'salt_g': 0.1},
+                          'nutrients': {'fat_g': 1, 'energy_kcal': 30, 'salt_g': 0.1},
                           'provenance': {'kind': 'user'}}])
         before = self.ledger.read_bytes()
         self.assertEqual(self.engine().run()['blocked'], 1)
@@ -215,7 +218,7 @@ class SyncTests(unittest.TestCase):
         ml = {**old_caps, 'base_unit': 'ml'}
         self.fake.capabilities = lambda: {**old_caps, 'by_base_unit': {'g': old_caps, 'ml': ml}}
         self.entry(items=[{'name': 'Synthetic drink', 'amount': '330 ml', 'basis': '100ml',
-                          'nutrients': {'energy_kcal': 30}, 'provenance': {'kind': 'user'}}])
+                          'nutrients': {'fat_g': 1, 'energy_kcal': 30}, 'provenance': {'kind': 'user'}}])
         s = self.engine()
         self.assertEqual(s.run()['synced'], 1)
         self.entry(2, 'erased')
@@ -225,13 +228,37 @@ class SyncTests(unittest.TestCase):
 
     def test_estimated_total_with_real_quantity_scales(self):
         self.entry(items=[{'name': 'Estimated plate', 'basis': {'per': 'total'},
-                          'amount': '250 g', 'nutrients': {'energy_kcal': 500},
+                          'amount': '250 g', 'nutrients': {'fat_g': 1, 'energy_kcal': 500},
                           'provenance': {'kind': 'estimate', 'confidence': 0.5,
                                          'uncertainty': 'portion estimated'}}])
         self.assertEqual(self.engine().run()['synced'], 1)
         p = next(iter(self.fake.products.values()))
         self.assertEqual(p['nutrients']['energy.energy'], 2)
         self.assertEqual(next(iter(self.fake.consumed.values()))['amount'], 250)
+
+    def test_declared_serving_size_is_an_explicit_quantity(self):
+        self.entry(items=[{'name': 'Synthetic bar', 'amount': '1 serving',
+                           'basis': {'per': '100g', 'serving': {'value': 40.0, 'unit': 'g'}},
+                           'nutrients': {'fat_g': 20, 'energy_kcal': 400},
+                           'provenance': {'kind': 'provider', 'provider': 'synthetic'}}])
+        self.assertEqual(self.engine().run()['synced'], 1)
+        self.assertEqual(next(iter(self.fake.consumed.values()))['amount'], 40)
+
+    def test_serving_without_declared_size_stays_blocked(self):
+        self.entry(items=[{'name': 'Synthetic bar', 'amount': '1 serving', 'basis': {'per': 'total'},
+                           'nutrients': {'fat_g': 8, 'energy_kcal': 160},
+                           'provenance': {'kind': 'user'}}])
+        self.assertEqual(self.engine().run()['blocked'], 1)
+        self.assertFalse(self.fake.calls)
+
+    def test_http_refusal_is_blocked_not_unknown_and_retries(self):
+        self.entry()
+        self.fake.fail = 'refuse'
+        s = self.engine()
+        out = s.run()
+        self.assertEqual((out['blocked'], out['unknown']), (1, 0))
+        self.assertIn('HTTP 400', str(out['entries']))
+        self.assertEqual(s.run()['synced'], 1)
 
     def test_actual_lock_blocks_second_runner(self):
         import fcntl
@@ -255,9 +282,9 @@ class SyncTests(unittest.TestCase):
 
     def test_partial_items_not_meal_synced(self):
         self.entry(items=[{'name': 'Good', 'amount': '50 g', 'basis': {'per': '100g'},
-                          'nutrients': {'energy_kcal': 200}, 'provenance': {'kind': 'user'}},
+                          'nutrients': {'fat_g': 1, 'energy_kcal': 200}, 'provenance': {'kind': 'user'}},
                          {'name': 'Unknown quantity', 'basis': {'per': 'total'},
-                          'nutrients': {'energy_kcal': 200}, 'provenance': {'kind': 'user'}}])
+                          'nutrients': {'fat_g': 1, 'energy_kcal': 200}, 'provenance': {'kind': 'user'}}])
         result = self.engine().run()
         self.assertEqual(result['synced'], 0)
         self.assertEqual(result['blocked'], 1)
@@ -322,7 +349,7 @@ class SyncTests(unittest.TestCase):
 
     def test_trace_blocks_instead_of_sending_fake_exact_zero(self):
         self.entry(items=[{'name': 'Trace', 'amount': '50 g', 'basis': {'per': '100g'},
-                          'nutrients': {'energy_kcal': 200, 'salt_g': '<0.5'},
+                          'nutrients': {'fat_g': 1, 'energy_kcal': 200, 'salt_g': '<0.5'},
                           'provenance': {'kind': 'user'}}])
         result = self.engine().run()
         self.assertEqual(result['blocked'], 1)
@@ -331,7 +358,7 @@ class SyncTests(unittest.TestCase):
 
     def test_string_basis_supported_as_core_allows(self):
         self.entry(items=[{'name': 'String basis', 'amount': '50 g', 'basis': '100g',
-                          'nutrients': {'energy_kcal': 200}, 'provenance': {'kind': 'user'}}])
+                          'nutrients': {'fat_g': 1, 'energy_kcal': 200}, 'provenance': {'kind': 'user'}}])
         self.assertEqual(self.engine().run()['synced'], 1)
 
     def test_omit_salt_exports_six_nutrients_without_mutating_real_ledger(self):
@@ -397,7 +424,7 @@ class SyncTests(unittest.TestCase):
                                          ('fat_g', '<1', True)):
             with self.subTest(nutrient=nutrient, value=value):
                 raw = {'name': 'Synthetic trace', 'amount': '50 g', 'basis': '100g',
-                       'nutrients': {'energy_kcal': 200, 'carbohydrate_g': 20,
+                       'nutrients': {'fat_g': 1, 'energy_kcal': 200, 'carbohydrate_g': 20,
                                      'salt_g': '<0.5', nutrient: value},
                        'provenance': {'kind': 'user'}}
                 if nutrient.startswith('sodium'):
@@ -415,7 +442,7 @@ class SyncTests(unittest.TestCase):
 
     def test_omit_salt_keeps_other_unit_nutrient_and_operation_gates(self):
         self.entry(items=[{'name': 'Synthetic food', 'amount': '50 g', 'basis': '100g',
-                          'nutrients': {'energy_kcal': 200, 'protein_g': 8, 'salt_g': 0.2},
+                          'nutrients': {'fat_g': 1, 'energy_kcal': 200, 'protein_g': 8, 'salt_g': 0.2},
                           'provenance': {'kind': 'user'}}])
         caps = self.fake.capabilities()
         self.fake.capabilities = lambda: caps
@@ -438,7 +465,7 @@ class SyncTests(unittest.TestCase):
 
     def test_omit_salt_direct_engine_requires_literal_true(self):
         self.entry(items=[{'name': 'Synthetic food', 'amount': '50 g', 'basis': '100g',
-                          'nutrients': {'energy_kcal': 200, 'salt_g': 0.2},
+                          'nutrients': {'fat_g': 1, 'energy_kcal': 200, 'salt_g': 0.2},
                           'provenance': {'kind': 'user'}}])
         caps = self.fake.capabilities()
         caps['nutrients']['salt_g'] = 'unverified'
@@ -487,7 +514,7 @@ class SyncTests(unittest.TestCase):
         self.addCleanup(ledger.close)
         logged = ledger.add({'eaten_at': '2026-01-01T12:00:00+00:00', 'meal': 'lunch',
                              'items': [{'name': 'Real ledger synthetic food', 'basis': '100g',
-                                        'amount': '50 g', 'nutrients': {'energy_kcal': 200},
+                                        'amount': '50 g', 'nutrients': {'fat_g': 1, 'energy_kcal': 200},
                                         'provenance': {'kind': 'user'}}]})
         s = self.engine()
         self.assertEqual(s.run()['synced'], 1)

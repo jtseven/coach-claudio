@@ -69,7 +69,11 @@ class IntegrationTests(unittest.TestCase):
         self.assertNotIn('nutrients', found['results'][0])
         url = urlsplit(calls[0]); q = parse_qs(url.query)
         self.assertEqual((url.scheme, url.netloc, url.path), ('https', 'search.openfoodfacts.org', '/search'))
-        self.assertEqual(q['q'], ['"Snickers OR countries_tags:*" countries_tags:"en:germany"'])
+        self.assertEqual(q['q'], ['Snickers or countries_tags\\:\\* countries_tags:"en:germany"'])
+        off.search('Ben & Jerry\'s "Cookie-Dough" (NOT AND)')
+        q = parse_qs(urlsplit(calls[1]).query)
+        self.assertEqual(q['q'], ['Ben \\& Jerry\'s \\"Cookie\\-Dough\\" \\(not and\\) '
+                                  'countries_tags:"en:germany"'])
         off.transport = lambda *a: (503, {}, b'unavailable')
         with self.assertRaises(fp.ProviderError) as err:
             off.search('Snickers')

@@ -154,6 +154,11 @@ the other unit's check.
   the canonical keys (no `energy_kj`, no `sodium_*`, so nothing is duplicated).
 - An unknown value (`None`) is left out of the payload, never sent as 0. If
   YAZIO then reports a value for it, the read-back carries a warning.
+- YAZIO refuses a product without fat (`400 Required nutrient types
+  "nutrient.fat" are missing`), so an item whose fat is unknown (e.g. BLS
+  below detection limit) is blocked locally with that reason, not sent.
+- YAZIO stores per-unit values rounded to 6 decimals; read-back accepts exactly
+  that difference and nothing more.
 - **No seven-nutrient guarantee:** a nutrient that isn't `live_confirmed` is
   listed in `local_only` with a warning. YAZIO's daily totals endpoint only has
   kcal and macros, so keep totals locally.
@@ -212,7 +217,9 @@ How the parent should use it:
 - `UnknownOutcome` covers a timeout, a 5xx, an unreadable success response or
   a failed read-back after sending. Mark the row `unknown`, don't resend, and
   call `reconcile_*` with the same payload later. Stop the export if it stays
-  ambiguous. Writes are never retried automatically.
+  ambiguous. Writes are never retried automatically. A 4xx refusal of the
+  create itself is definite (nothing written): the row is `blocked`, not
+  `unknown`.
 - Every create reconciles first: an id that's already present and identical is
   `confirmed` without a second POST, and a different one is `ReadbackMismatch`.
   Consumed-day reads require all three bucket keys with actual lists; missing,
