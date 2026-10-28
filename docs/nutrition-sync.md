@@ -128,7 +128,8 @@ created per local item revision; there is no branded/shared-product mutation.
   Unknown nutrients stay unknown, never zero.
 - `100g` and `100ml` snapshots require an explicit eaten quantity of the same
   dimension. Mass/volume unit conversions use the core's deterministic tables.
-  No ml→g density assumption or guessed serving size is made.
+  No ml→g density assumption or guessed serving size is made; `N serving` counts
+  only when the basis declares the serving size (label or provider, e.g. 40 g).
 - A `total` photo/user snapshot can be converted to per-100 only when its original
   item includes an explicit measured or explicitly estimated positive g/ml amount.
   A calorie-only plate with unknown grams remains blocked with `missing amount`.

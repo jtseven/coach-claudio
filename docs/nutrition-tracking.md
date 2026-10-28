@@ -238,7 +238,9 @@ the application explicitly requests v3.6 unless configured otherwise.
 Text search uses the separately documented official Search-a-licious API:
 `GET https://search.openfoodfacts.org/search` with `q`, `langs`, `page_size`,
 `page` and `fields` ([live OpenAPI](https://search.openfoodfacts.org/openapi.json)).
-User text is a quoted Lucene literal; the country filter is built internally.
+User text becomes literal terms: every Lucene syntax character is escaped and
+`AND`/`OR`/`NOT` are lowercased (a quoted phrase matches nothing on
+Search-a-licious, observed Oct 2026). The country filter is built internally.
 `hits` are candidate metadata, not nutrition snapshots. Search and product
 requests have separate 10/minute budgets, bounded response size, no redirects
 and the same custom contact User-Agent. Product cache keys separate v2/v3.6.

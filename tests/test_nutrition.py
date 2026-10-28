@@ -363,6 +363,21 @@ class ProposalTests(LedgerTests.__base__):
         with self.assertRaises(store.NotFound):
             self.led.cancel("p_000000000000")
 
+    def test_cancelled_proposal_redelivery_stays_dropped(self):
+        p = self.led.propose(entry(items=[item(amount=None)]))["proposal"]
+        self.led.cancel(p["id"])
+        self.assertEqual(self.led.add(entry())["status"], "duplicate")
+        self.assertEqual(self.led.list_entries(), [])
+
+    def test_new_message_after_cancel_logs_a_fresh_meal(self):
+        p = self.led.propose(entry(items=[item(amount=None)]))["proposal"]
+        self.led.cancel(p["id"])
+        res = self.led.add(entry(source_events=["telegram:42:1001", "telegram:42:1002"]))
+        self.assertEqual(res["status"], "logged")
+        again = self.led.add(entry())
+        self.assertEqual(again["status"], "duplicate")
+        self.assertEqual(again["entry"]["id"], res["entry"]["id"])
+
     def test_invalid_data_is_refused_even_as_proposal(self):
         with self.assertRaises(core.InvalidInput):
             self.led.propose(entry(items=[item(amount="-3 g")]))

@@ -124,18 +124,21 @@ class Sync:
     def prepare(self, client, job):
         snap = json.loads(job['snapshot'])
         raw = snap['item']
-        per, _ = core.parse_basis(raw.get('basis'))
+        per, serving = core.parse_basis(raw.get('basis'))
         if per not in ('100g', '100ml', 'total'):
             raise ValueError('unsupported basis: expected 100g, 100ml or total with explicit g/ml quantity')
         if not raw.get('amount'):
             raise ValueError('missing amount: measured or explicitly estimated g/ml quantity required')
         computed = core.compute_item(raw)
         quantity, unit = core.parse_quantity(raw['amount'])
-        dimension = core.dimension(unit)
-        if dimension == 'count':
-            raise ValueError('unsupported amount: explicit g/ml quantity required (no guessed serving)')
-        unit = 'g' if dimension == 'mass' else 'ml'
-        amount = float(quantity * (core.MASS_G if unit == 'g' else core.VOLUME_ML)[core.parse_quantity(raw['amount'])[1]])
+        if core.dimension(unit) == 'count':
+            # "1 serving" of a declared serving size (label or provider) is explicit.
+            if serving is None or per == 'total':
+                raise ValueError('unsupported amount: explicit g/ml quantity required (no guessed serving)')
+            quantity, unit = quantity * serving[0], serving[1]
+        scale = (core.MASS_G if core.dimension(unit) == 'mass' else core.VOLUME_ML)[unit]
+        unit = 'g' if core.dimension(unit) == 'mass' else 'ml'
+        amount = float(quantity * scale)
         if per != 'total' and per != '100' + unit:
             raise ValueError('amount/basis dimension mismatch: no implicit ml-to-g conversion')
         caps = client.capabilities()
@@ -187,7 +190,12 @@ class Sync:
             result = reconcile(draft)
             if result['status'] == 'absent':
                 self.update(db, job, state='unknown', reason=phase + ' write in flight; reconcile before retry')
-                result = create(draft)
+                try:
+                    result = create(draft)
+                except ny.YazioHTTPError:
+                    # A 4xx refusal (5xx is UnknownOutcome): nothing was written.
+                    self.update(db, job, state='pending')
+                    raise
             if result['status'] != 'confirmed':
                 raise ny.ReadbackMismatch(phase, job['cid'], ['not confirmed by readback'])
             # Independently require readback, even for a misleading adapter return.

@@ -164,8 +164,11 @@ class OpenFoodFacts(Provider):
                      "fr": "france", "gb": "united-kingdom", "us": "united-states"}
         if self.country != "world" and self.country not in countries:
             raise core.InvalidInput("OFF search country not mapped; use world or a supported country")
-        # Quoted literal: only quote and backslash need escaping within a phrase.
-        literal = '"' + query.replace('\\', '\\\\').replace('"', '\\"') + '"'
+        # Literal terms: Search-a-licious matches nothing for any quoted phrase
+        # (observed Oct 2026), so escape every query-syntax character instead
+        # and lowercase the operator words.
+        literal = re.sub(r'[+\-=&|><!(){}\[\]^"~*?:\\/]', r'\\\g<0>', query)
+        literal = re.sub(r'\b(AND|OR|NOT)\b', lambda m: m[0].lower(), literal)
         if self.country != "world":
             literal += f' countries_tags:"en:{countries[self.country]}"'
         params = {"q": literal, "langs": ",".join(dict.fromkeys((self.language, "en"))),

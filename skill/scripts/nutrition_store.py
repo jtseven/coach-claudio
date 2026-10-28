@@ -296,9 +296,16 @@ class Ledger:
             return None
         kind, target = targets.pop()
         if kind == "proposal":
-            row = db.execute("SELECT entry_id FROM proposals WHERE id = ?", (target,)).fetchone()
+            row = db.execute("SELECT state, entry_id FROM proposals WHERE id = ?",
+                             (target,)).fetchone()
             if row and row["entry_id"]:
                 kind, target = "entry", row["entry_id"]
+            elif row and row["state"] == "cancelled" and not all(rows):
+                # A new message alongside a dropped proposal's is a fresh meal,
+                # not a redelivery: release the dropped claims, don't bind to it.
+                db.executemany("DELETE FROM source_events WHERE key = ?",
+                               [(e,) for e, r in zip(events, rows) if r])
+                return None
         for e in events:
             db.execute("INSERT OR IGNORE INTO source_events VALUES (?, ?, ?, ?)",
                        (e, kind, target, self.now()))

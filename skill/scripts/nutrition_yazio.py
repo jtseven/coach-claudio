@@ -65,6 +65,11 @@ NUTRIENT_KEYS = {
     'sugars_g': 'nutrient.sugar',
     'salt_g': 'nutrient.salt',
 }
+# POST /user/products answers HTTP 400 "Required nutrient types ... are missing"
+# without these (fat observed live, Oct 2026).
+REQUIRED_NUTRIENTS = ('energy_kcal', 'fat_g')
+# YAZIO stores per-unit nutrient values rounded to 6 decimals (observed live).
+STORED_DECIMALS = 6
 DAYTIMES = ('breakfast', 'lunch', 'dinner', 'snack')
 MAX_AMOUNT = 20000
 UUID_RE = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
@@ -1009,8 +1014,10 @@ def prepare_product(per, nutrients, product_id, name, *, category, base_units,
             continue
         out[key] = float(Decimal(repr(v)) / 100)
         synced.append(local)
-    if 'energy_kcal' not in synced:
-        raise ValueError('energy_kcal is required for a YAZIO product')
+    missing = [k for k in REQUIRED_NUTRIENTS if k not in synced]
+    if missing:
+        raise ValueError(', '.join(missing) + ' required for a YAZIO product but unknown '
+                         'locally (never sent as 0)')
     payload = {'id': product_id, 'name': name.strip(), 'category': category, 'base_unit': unit,
                'is_private': True, 'nutrients': out, 'servings': []}
     if producer:
@@ -1105,6 +1112,12 @@ def _close(a, b):
             and math.isclose(a, b, rel_tol=1e-6, abs_tol=1e-9))
 
 
+def _stored_close(got, sent):
+    """Remote equals what YAZIO stores for `sent`: its value at 6 decimals."""
+    return _close(got, sent) or (_close(got, got) and _close(sent, sent)
+                                 and abs(got - sent) <= 0.5 * 10 ** -STORED_DECIMALS + 1e-12)
+
+
 def compare_product(payload, remote):
     """(diffs, verified_local_keys, warnings) for a draft vs GET /products/{id}."""
     diffs, verified, warnings = [], [], []
@@ -1123,7 +1136,7 @@ def compare_product(payload, remote):
     sent = payload.get('nutrients', {})
     for local, key in NUTRIENT_KEYS.items():
         if key in sent:
-            if _close(got.get(key), sent[key]):
+            if _stored_close(got.get(key), sent[key]):
                 verified.append(local)
             else:
                 diffs.append(local)
