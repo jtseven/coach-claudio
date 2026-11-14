@@ -40,6 +40,14 @@ Example:
 W1  18/9    W2  21/10   W3  24/12   W4  18/9  DOWN
 -->
 
+## Current pace and progression decisions
+
+<!-- Reviewed current marathon effort/pace, its evidence/date and uncertainty;
+ambition separately from race equivalents. Run-frequency slots, long-run
+duration/recovery budget, current quality dose and what changes next. Use
+references/marathon-training.md for examples. Record taper percentages against
+a completed normal baseline, excluding the race itself from race-week km. -->
+
 ## The default week
 
 <!-- The template "Generating a week" adapts. Which days are runs, which

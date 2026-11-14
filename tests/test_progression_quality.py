@@ -116,7 +116,8 @@ class ProgressionQuality(unittest.TestCase):
 
     def test_efficiency_and_zones_show_sparse_stale_missingness(self):
         rows = [dict(id='1', date='2026-09-07', sport='Run', moving_s=1800,
-                     pct_above_ceiling=5, ef=1.2, intensity_s=dict(low=900,mid=0,high=0)),
+                     pct_above_ceiling=5, ef=1.2, quality=dict(hr_observed_s=1800, speed_hr_s=1800),
+                     intensity_s=dict(low=900,mid=0,high=0)),
                 dict(id='2', date='2026-09-14', sport='Run', moving_s=1800)]
         (self.home/'athlete/state/run_log.jsonl').write_text(
             ''.join(json.dumps(r)+'\n' for r in rows))
@@ -207,7 +208,8 @@ class ProgressionQuality(unittest.TestCase):
 
     def test_recent_unusable_run_does_not_make_old_efficiency_fresh(self):
         rows = [dict(id=str(i), date=f'2026-08-{i:02}', sport='Run', moving_s=1800,
-                     pct_above_ceiling=5, ef=1.2) for i in range(1, 7)]
+                     pct_above_ceiling=5, ef=1.2,
+                     quality=dict(hr_observed_s=1800, speed_hr_s=1800)) for i in range(1, 7)]
         rows.append(dict(id='latest', date='2026-10-04', sport='Run', moving_s=1800))
         (self.home/'athlete/state/run_log.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in rows))
         p = self.cli('efficiency', '--as-of', '2026-10-05')
@@ -293,6 +295,158 @@ class ProgressionQuality(unittest.TestCase):
         p, out = self.review(proposed='32')
         self.assertEqual(p.returncode, 2)
         self.assertEqual(out['max_next_week_km'], 31)
+
+    def test_build_and_down_return_do_not_ratchet_to_old_median(self):
+        rows = self.history(last=36)
+        rows[-1].update(week_kind='normal')
+        self.log.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+        p, out = self.review(proposed='39.6')
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(out['max_next_week_km'], 39.6)
+        self.assertEqual(out['reference_km'], 36)
+        rows.append(dict(week_of='2026-10-05', actual_km=25, week_kind='planned-down',
+                         tolerated=True, coverage_complete=True))
+        self.log.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+        p, out = self.review('--as-of', '2026-10-12', mode='planned-down', proposed='36')
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(out['max_next_week_km'], 36)
+
+    def test_down_week_cannot_bridge_illness_to_old_normal(self):
+        rows = self.history()
+        rows[-2]['week_kind'] = 'illness'
+        self.log.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+        p, out = self.review(mode='planned-down', proposed='20')
+        self.assertEqual(p.returncode, 2)
+        self.assertIsNone(out['max_next_week_km'])
+
+    def test_sunday_closeout_requires_explicit_closed_reporting_period(self):
+        self.history()
+        p = self.cli('progression', '--log', str(self.log), '--as-of', '2026-10-04')
+        self.assertNotEqual(p.returncode, 0)
+        for cmd in ('progression', 'trend', 'block'):
+            p = self.cli(cmd, '--log', str(self.log), '--as-of', '2026-10-04',
+                         '--closed-week', '2026-09-28', '--mode', 'planned-down',
+                         '--reason', 'Sunday closeout', '--evidence', 'all sessions finished; coverage reviewed')
+            self.assertEqual(p.returncode, 0, p.stderr)
+            out = json.loads(p.stdout)
+            policy = out if cmd == 'progression' else out['progression']
+            self.assertEqual(policy['max_next_week_km'], 31)
+        p = self.cli('progression', '--log', str(self.log), '--as-of', '2026-10-01',
+                     '--closed-week', '2026-09-28', '--reason', 'x', '--evidence', 'x')
+        self.assertNotEqual(p.returncode, 0)
+
+    def test_sunday_closeout_cannot_assert_coverage_or_hide_projections(self):
+        rows = self.history()
+        rows[-1]['coverage_complete'] = False
+        self.log.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+        p = self.cli('progression', '--log', str(self.log), '--as-of', '2026-10-04',
+                     '--closed-week', '2026-09-28', '--reason', 'x', '--evidence', 'x')
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn('coverage', p.stderr)
+
+    def test_optimistic_projection_can_disprove_but_not_prove_feasibility(self):
+        self.history()
+        p, out = self.review('--peak-km', '50', '--weeks-to-peak', '1', mode='planned-down')
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(out['projection']['within_upper_bound'])
+        self.assertIn('Not a prescription', out['projection']['limitations'])
+        # A down-week return may exceed last-week * 1.10; the screen must not
+        # incorrectly declare a currently allowed return impossible.
+        p, out = self.review('--peak-km', '31', '--weeks-to-peak', '1', mode='planned-down')
+        self.assertTrue(out['projection']['within_upper_bound'])
+        self.assertEqual(out['projection']['optimistic_upper_km'], 31)
+
+    def test_session_window_excludes_future_today_and_other_sports(self):
+        rows = [dict(date='2026-09-04', km=100, moving_s=36000),
+                dict(date='2026-09-06', km=10, moving_s=3600),
+                dict(date='2026-10-04', km=12, moving_s=4000),
+                dict(date='2026-10-05', km=100, moving_s=36000),
+                dict(date='2026-10-06', km=100, moving_s=36000),
+                dict(date='2026-10-04', sport='Ride', km=100, moving_s=36000)]
+        (self.home/'athlete/state/run_log.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in rows))
+        p = self.cli('session', '--date', '2026-10-05', '--proposed-km', '14',
+                     '--proposed-minutes', '90', '--weekly-km', '28')
+        out = json.loads(p.stdout)
+        self.assertEqual(out['observed_runs'], 2)
+        self.assertEqual(out['recent_longest_km'], 12)
+        self.assertAlmostEqual(out['distance_ratio'], 14/12)
+        self.assertEqual(out['weekly_share'], .5)
+        self.assertEqual(len(out['warnings']), 3)
+        self.assertNotIn('accepted', out)
+        self.assertIsNone(out['coverage_complete'])
+
+    def test_session_without_history_is_unknown_not_safe(self):
+        p = self.cli('session', '--date', '2026-10-05', '--proposed-km', '10')
+        out = json.loads(p.stdout)
+        self.assertIsNone(out['distance_ratio'])
+        self.assertTrue(out['warnings'])
+
+    def test_sparse_hr_is_preserved_and_cannot_enter_efficiency_trend(self):
+        st = dict(time=[0, 10, 3600], heart_rate=[140, 140, None],
+                  velocity_smooth=[3, 3, 4], moving=[True]*3)
+        p = self.cli('streams', '--streams', json.dumps(st), '--append', '--id', 'sparse',
+                     '--date', '2026-10-04')
+        self.assertEqual(p.returncode, 0, p.stderr)
+        out = json.loads(p.stdout)
+        self.assertAlmostEqual(out['ef'], 3*60/140, places=3)
+        saved = json.loads((self.home/'athlete/state/run_log.jsonl').read_text())
+        self.assertEqual(saved['quality']['hr_missing_s'], 3590)
+        self.assertEqual(saved['quality']['speed_hr_s'], 10)
+        p = self.cli('efficiency', '--as-of', '2026-10-05')
+        self.assertEqual(json.loads(p.stdout)['quality']['usable_runs'], 0)
+
+    def test_legacy_metric_coverage_is_unknown_not_assumed_complete(self):
+        row = dict(date='2026-10-04', moving_s=3600, ef=1.2, pct_above_ceiling=0)
+        (self.home/'athlete/state/run_log.jsonl').write_text(json.dumps(row)+'\n')
+        out = json.loads(self.cli('efficiency', '--as-of', '2026-10-05').stdout)
+        self.assertEqual(out['quality']['usable_runs'], 0)
+        self.assertEqual(out['quality']['hr_coverage_unknown_runs'], 1)
+
+    def test_complete_paired_metrics_remain_usable(self):
+        st = dict(time=list(range(0, 3601, 60)), heart_rate=[140]*61, velocity_smooth=[3]*61)
+        p = self.cli('streams', '--streams', json.dumps(st), '--append', '--id', 'full',
+                     '--date', '2026-10-04', '--ceiling', '150')
+        self.assertEqual(p.returncode, 0, p.stderr)
+        out = json.loads(self.cli('efficiency', '--as-of', '2026-10-05').stdout)
+        self.assertEqual(out['quality']['usable_runs'], 1)
+
+    def test_coarse_stream_cannot_crash_decoupling(self):
+        st = dict(time=[0, 1800, 3600], heart_rate=[140]*3, velocity_smooth=[3]*3)
+        p = self.cli('streams', '--streams', json.dumps(st))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn('pct', json.loads(p.stdout)['decoupling'])
+
+    def test_multiple_build_down_blocks_do_not_roll_back_tolerated_volume(self):
+        from datetime import date, timedelta
+        monday = date(2026, 8, 3)
+        rows = [dict(week_of=(monday+timedelta(weeks=i)).isoformat(), actual_km=30,
+                     week_kind='normal', tolerated=True, coverage_complete=True) for i in range(3)]
+        prior_normal = 30
+        for i in range(3, 19):
+            self.log.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+            mode = 'planned-down' if rows[-1]['week_kind'] == 'planned-down' else 'build'
+            p = self.cli('progression', '--log', str(self.log),
+                         '--as-of', (monday+timedelta(weeks=i)).isoformat(), '--mode', mode,
+                         '--reason', 'synthetic block', '--evidence', 'complete tolerated training')
+            self.assertEqual(p.returncode, 0, p.stderr)
+            cap = json.loads(p.stdout)['max_next_week_km']
+            down = i % 4 == 3
+            if mode == 'planned-down':
+                self.assertEqual(cap, prior_normal)
+            km = round(prior_normal*.75, 1) if down else cap
+            if not down:
+                self.assertGreaterEqual(km, prior_normal)
+                prior_normal = km
+            rows.append(dict(week_of=(monday+timedelta(weeks=i)).isoformat(), actual_km=km,
+                             week_kind='planned-down' if down else 'normal',
+                             tolerated=True, coverage_complete=True))
+        self.assertGreater(prior_normal, 50)
+
+    def test_marathon_training_pace_is_same_model_as_race_equivalent(self):
+        p = self.cli('paces', '--vdot', '41')
+        out = json.loads(p.stdout)
+        self.assertEqual(out['paces']['marathon'], '5:20')
+        self.assertIn('not a demonstrated marathon target', out['limitations'])
 
 
 if __name__ == '__main__':

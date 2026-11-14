@@ -5,20 +5,22 @@ routines, booked races — is in `athlete/plan.md`. This file is how to run
 any plan: the weekly cycle, the calendar events, the gym routines. Read both
 before generating or changing a week.
 
-Phase intent in brief (the athlete's plan says how it applies to them):
+For marathon session patterns, long-run review, pace selection, taper and race
+execution, read `marathon-training.md`. Its example doses are starting points,
+not universal limits. Phase intent (adapt to the athlete and race):
 
 - **Base** — one job: raise the volume their legs tolerate. Almost all easy,
-  strides allowed, **no tempo or interval work**. It feels unnecessarily
-  gentle; that's the point.
+  strides allowed. For low-volume/returning runners, establish consistency
+  before sustained quality; experienced runners may retain a familiar small dose.
 - **Aerobic development** — one quality session a week at most (steady/tempo
-  blocks, later threshold intervals). Protect the long run and that one
-  session; everything else is negotiable. Treadmill and indoor bike are
+  blocks, later threshold intervals). Preserve repeatable easy-run frequency;
+  fit quality and the long run around recovery rather than compressing them. Treadmill and indoor bike are
   legitimate winter substitutes, not failures.
 - **Specific build** — race-pace work is the priority session, the longest
   long runs, and rehearsing everything: breakfast, gels, kit, pacing. Nothing
   new in the last month. If the race is on a different weekday than their
   usual long run, move long runs to race weekday in this phase.
-- **Taper** — volume drops, intensity stays. They will feel sluggish and
+- **Taper** — volume and hard minutes drop; small amounts of familiar intensity stay. They will feel sluggish and
   doubtful; that is normal and worth saying out loud when it happens.
 
 ## Calendar mechanics
@@ -72,18 +74,25 @@ gym session, it's a placeholder — always pair the two. With Hevy off, the
 session's calendar description carries the exercises, sets and reps instead.
 
 **What runner-support strength looks like** (unless the plan says otherwise):
-the race is the primary training stimulus and gym exists to protect it, so
-keep sessions short and moderate:
+strength supports running economy and physical capacity; it does not guarantee
+injury prevention. Keep its fatigue compatible with the running week:
 
 - **Lower + core**: a squat pattern, a single-leg movement (Bulgarian split
-  squat or step-up — these do more for injury-proofing a runner than
-  bilateral lifts), a hip hinge (RDL or similar), calf raises, and one core
+  squat or step-up; neither unilateral nor bilateral work is universally
+  superior for preventing running injuries), a hip hinge (RDL or similar), calf raises, and one core
   move (dead bug, side plank, or similar anti-rotation work).
 - **Upper + core**: a push, a pull, and core. Upper body strength isn't the
   limiter for a runner; this session exists so it isn't lost over a season.
-- **Sets/reps**: 2–3 sets, 8–12 reps for main lifts, 12–20 for core and
-  calves. Loads leave reps in reserve — soreness that compromises tomorrow's
-  run is a worse outcome than a slightly undertrained gym session.
+- **Sets/reps**: begin with 2–3 sets of 8–12 controlled reps while learning.
+  Once technically competent and tolerating it, selected main lifts can use
+  3–6 heavier reps with about two reps in reserve and adequate rest. No maximal
+  testing is needed. A small familiar plyometric dose is optional; introduce
+  it separately from running increases. Accessories need not all become heavy.
+- **Budget and placement**: record a working-set budget and session duration.
+  Adding exercises/sets and load together is progression too. Avoid demanding
+  legs immediately before quality or a long run; after a key run or on the same
+  day can consolidate stress if the athlete tolerates it. Keep the key run first.
+  Reduce sets around races and in taper; never chase soreness.
 
 **Workflow:**
 
@@ -150,6 +159,13 @@ long run, are still outstanding. So the volume decision rests partly on a
 projection, and the close-out is where that projection meets reality.
 
 ## Closing out the week
+
+On Sunday evening, only after all sessions are finished and coverage reviewed,
+pass `--closed-week <this Monday>` with reason/evidence to `progression`, `trend`
+or `block`. This explicitly closes the reporting period; do not advance
+`--as-of` into the future or include unfinished planned sessions. Without the
+flag, the current week remains partial until Monday. For example on Sunday
+2026-10-04, use `--closed-week 2026-09-28`.
 
 Pull the week's activities once and log the week:
 
@@ -294,12 +310,14 @@ python3 <skill>/scripts/analyze.py trend --last 8
   symptoms, tolerance and the rest of their sport, then validate a proposal.
 - **Use one policy, not a second hand-calculated ceiling.** `progression`,
   `trend`, `block` and `week` use the same guardrails. Ordinary builds are
-  bounded by both the last completed normal week and a recent multiweek
-  tolerated normal baseline. Sparse/unconfirmed history cannot justify an
+  bounded by the last completed tolerated normal week, with at least three
+  eligible normal weeks in the recent history. The median is descriptive; it
+  no longer forces a rollback after successful progression. Sparse/unconfirmed history cannot justify an
   automatic jump. The default 10% build cap is a configurable heuristic,
   not a scientifically guaranteed injury-prevention threshold.
 - **Planned down-week return:** a documented reduction may return to the
-  recent normal baseline, not get trapped at down-week km × 1.1. For example,
+  most recent tolerated normal week before that down block, not get trapped
+  at down-week km × 1.1 or roll back to an older median. For example,
   tolerated normal weeks of 30, 32 and 31 km, then a planned 22 km down week,
   can support reviewing 31 km — not automatically prescribing it.
 - **Travel return:** use a discounted normal baseline (default 75%) and
@@ -370,12 +388,18 @@ python3 <skill>/scripts/weather.py window --date 2026-08-11 --between 06:00-21:0
 ```
 
 If a cooler slot is materially better *and* their calendar allows it, move
-the session and say why. Do not move anything for a couple of degrees, and do
-not drop sessions for weather — thunderstorms and ice are the only conditions
-that justify that.
+the session and say why. Do not move anything for a couple of degrees, and shorten, move indoors or omit sessions when heat/humidity, air quality or
+other hazardous conditions make the planned exposure inappropriate. Thunderstorms
+and ice are examples, not an exhaustive list. Use local official warnings,
+acclimation and symptoms; no universal temperature cutoff clears a session.
 
 **6. Lay out the week** from the default week in `athlete/plan.md`, adapted
-to steps 3–5.
+to steps 3–5. Review the long run with `analyze.py session` and the criteria in
+`marathon-training.md`. Check distance/duration, intensity, descent, adjacent
+days, gym and fuelling. Hold distance when introducing/expanding sustained
+quality; an MP long run counts as quality. A passed weekly allowance cannot
+approve session concentration or intensity. At block reviews, project the
+remaining build with actual down/travel/race/taper weeks and revise infeasible targets.
 
 **7. Write the events.** Every running session description states the
 target pace **and** the HR ceiling for easy work, plus one line on why the
@@ -394,10 +418,14 @@ run sits, anything to watch. Not a table.
 
 When a week can't all happen:
 
-1. **Long run** — the irreplaceable session
-2. **Total weekly volume** — swap sessions around freely to protect it
-3. **Individual easy runs**
-4. **Gym** — most droppable
+1. **Health, recovery and realistic run slots** in every phase.
+2. **Base/development:** repeatable easy frequency and a manageable long run
+   before extra quality; do not sacrifice the supporting week for one run.
+3. **Specific:** preserve the most useful marathon stimulus when recovered
+   (MP long run counts as both long and quality), with enough easy support.
+4. **Taper:** freshness and small familiar exposures; no mileage catch-up.
+5. **Gym/accessories:** trim fatigue-producing volume when it competes with
+   the running priorities; retain a manageable maintenance dose if possible.
 
 Say this out loud when they're stressed about a week. Knowing what to
 sacrifice is more useful than being told to do everything.

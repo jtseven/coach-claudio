@@ -13,7 +13,7 @@ SCRIPTS = ROOT / 'skill/scripts'
 
 class DeliveryTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix='delivery-', dir=os.environ['TMPDIR'])
+        self.tmp = tempfile.TemporaryDirectory(prefix='delivery-', dir=os.environ.get('TMPDIR'))
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name)
         (self.home / 'athlete/state').mkdir(parents=True)

@@ -126,7 +126,10 @@ Then propose, and let them confirm or correct:
 - `threshold_hr`.
 - `easy_ceiling` — the top of their easy zone. If their watch zones look
   sensible, the top of Z2; if not (Strava's defaults are often too generous),
-  roughly 75–77% of HRmax, or about 18 bpm under threshold. Say how you got it.
+  roughly 75–77% of HRmax, or about 18 bpm under threshold can be a conservative
+  provisional estimate. Validate against conversational effort/talk test and
+  comparable runs; fixed percentages have individual error. Do not raise it
+  solely to accommodate drift; review heat, duration, effort and symptoms.
 - `zones` — exactly as configured on their watch/Strava, so the coach never
   contradicts what they see. If they change their zones because of this
   setup, use the new ones.
@@ -182,9 +185,10 @@ adjust before writing. Principles:
   no intervals), aerobic development (one quality session a week appears),
   specific build (race-pace work in long runs, the longest runs, rehearsing
   fuelling and kit), taper (marathon 2–3 weeks, half 1–2, 10K about one).
-- **Long run** about half the weekly volume early on; for a marathon, build
-  toward two or three runs of 30–34 km in the specific phase if the timeline
-  allows; for a half, 18–22 km.
+- **Long run** follows recent distance/duration, supporting weekly running
+  and recovery. Do not universally prescribe half the week or three 30 km+
+  runs. For marathon sessions, frequency, long-run reviews, taper and pacing,
+  use `marathon-training.md`; record current MP evidence and a recovery budget.
 - **Peak volume** follows from their history and time, not from a template:
   a first marathon off 15 km a week is a different plan from a fifth off 50.
 - **Not enough time?** If conservative reviewed progression can't reach a sensible peak before the
