@@ -67,9 +67,10 @@ distinction matters, because the coaching response differs:
 ## 3. HR/power decoupling
 
 When Strava records running power (`average_watts`, and a `watts` stream —
-from a watch or footpod that measures it), this is the single most useful
-signal for detecting fatigue, heat stress, or a bad night, because it separates
-*mechanical work done* from *cardiovascular cost*. No power data → skip this
+from a watch or footpod that estimates it), watts-per-beat is one contextual
+comparison of estimated output with cardiovascular response. It does not
+isolate fatigue, heat or sleep, and is not a direct measurement of metabolic
+cost. Keep device, effort and terrain comparable. No power data → skip this
 section; matched segments (section 4) do a similar job with pace.
 
 The metric is **watts per beat**: `average_watts / average_heartrate`. Higher is
@@ -129,8 +130,9 @@ python3 <skill>/scripts/analyze.py streams --streams <file> --append --id <id> -
 ```
 
 It leaves the first 10 minutes out as warm-up (`--skip-warmup`), uses power
-when there is any (hills don't fool it) and pace otherwise, and also prints
-efficiency, time above the ceiling and time per zone. `--append` records the
+when sufficiently observed and pace otherwise; hills, technical terrain and
+device estimates can confound either basis. It also prints efficiency, time
+above the ceiling and time per zone. `--append` records the
 run in the run log for the trends in section 11; a run already there is
 skipped.
 
@@ -179,7 +181,11 @@ you've seen them come up a few times.
 
 ## 5. Race prediction and zone recalibration
 
-Two independent methods, worth running both and reporting the range.
+Riegel and VDOT are related race-equivalence calculations, not independent
+confirmations of marathon readiness. Their spread is not a confidence interval.
+Read `marathon-training.md` for current-target selection and pacing; use recent
+races plus sustained volume, long-run execution and rehearsed fuelling. Do not
+convert a short-race equivalent directly into an assured marathon goal.
 
 **Riegel:** `T2 = T1 × (D2/D1)^1.06`. Simple, tends to be optimistic for the
 marathon specifically because it assumes marathon-adequate training — which for
@@ -321,9 +327,9 @@ What each marker is actually good for:
   real only if resting HR and HRV corroborate it. Use it as encouragement on a
   long trend, never as a fitness verdict, and never convert it into a race
   prediction — VDOT from an actual race result is the number for that.
-- **Resting HR down and HRV up together, over months,** is the clearest evidence
-  the aerobic work is working — better evidence than any single run. Worth saying
-  when it's true.
+- **Resting HR and HRV trends** can corroborate other observations, but season,
+  stress, sampling and device changes also move them. They do not independently
+  prove aerobic improvement. Prefer comparable runs and actual training/race execution.
 
 ```bash
 python3 <skill>/scripts/health.py trend --metric vo2_max
@@ -334,6 +340,18 @@ python3 <skill>/scripts/health.py trend --metric resting_heart_rate
 Health says what it cost them. When those disagree — a run that looked fine but cost a
 5-bpm resting HR rise the next morning — the cost is the more interesting half
 and usually the thing worth telling them.
+
+### Illness return and evidence
+
+Wearable flags prompt context, not a diagnosis. Compare repeated nights and the
+athlete's normal sampling pattern; a single threshold crossing does not decide
+training. Do not use the neck-check or a fixed number of missed days as clearance.
+After mild illness has settled, resume with a short easy exposure and review
+the response during, after and the following day before extending. Systemic
+symptoms or concerning exercise symptoms need medical guidance.
+[IOC respiratory-illness consensus](https://doi.org/10.1136/bjsports-2022-105759)
+supports symptom/severity assessment and a monitored return rather than a
+wearable diagnosis. The tool's conservative return cap is administrative.
 
 ## 9. Running form — cadence, ground contact, vertical oscillation
 
@@ -361,10 +379,9 @@ What's worth acting on, in order:
   persists, suggest assessment rather than prescribing a cadence fix from
   this number alone. Small technique experiments should be optional and
   symptom-led, not a requirement for progressing volume.
-- **Ground contact time** — falls as running economy improves.
-  Slow-moving; a monthly trend, not a daily talking point.
-- **Vertical oscillation** — bounce. Lower is generally more economical,
-  but chasing it directly is a bad idea; it improves as a by-product of cadence.
+- **Ground contact time and vertical oscillation** — strongly affected by speed,
+  terrain, body dimensions and device. Lower is not automatically better economy.
+  Do not coach a change from whole-day averages or chase a particular number.
 - **Stride length and running speed** — mostly inputs to cadence. Note that speed
   here is a whole-day running average, so it drops on a day with warm-up walking
   mixed in.
@@ -374,9 +391,8 @@ What's worth acting on, in order:
   confident wrong answer. Keep the two sources in separate arguments.
 
 Form metrics move slowly and are noisy day to day. The honest use is a trend
-across weeks, or as supporting evidence for something else — "the knee complaint
-lines up with cadence dropping to 158 on the longer runs" is real coaching; "your
-vertical oscillation was 0.2 cm higher today" is noise dressed as insight.
+across comparable weeks, with symptoms and effort as context. A cadence change
+coinciding with pain does not identify its cause or justify a corrective target.
 
 ## 10. Training load — fitness, fatigue, form
 
@@ -436,12 +452,18 @@ the pace their easy heart rate buys. Rules:
 
 **Intensity distribution** splits running time into low (at or under the
 easy ceiling), high (at or over threshold HR) and the middle. Most of an
-amateur's time belongs in low — roughly three quarters or more. A large
-middle is the classic pattern: easy runs drifting up, hard runs not hard,
-everything moderately tiring. That's the time to say so, with the number;
-when the distribution is fine, it doesn't need a mention. Recoveries inside
+amateur's time is usually low, but the appropriate distribution depends on
+phase and session intent. Planned steady/MP work legitimately increases the
+middle in a specific block. Keep it in the measured totals; compare intended
+and unintended middle time before advising a change. No automatic polarized
+quota or diagnosis from the tool's observed percentages. Recoveries inside
 intervals count as low, so a session-heavy week reads a little easier than
 it was.
+
+Easy-run efficiency trends require observed HR and matched output coverage.
+New run-log rows retain that quality; legacy rows remain coverage-unknown and
+are excluded rather than silently assumed complete. The 90% coverage filter is
+an operational minimum, not a scientific significance threshold.
 
 ## 12. Charts
 

@@ -57,7 +57,7 @@ weight_body_mass` with Apple Health on).
 | Carbs, rest/easy day | 3–5 g |
 | Carbs, long run / big day | 5–7 g |
 | Carbs, peak build weeks | 6–8 g |
-| Carb load (36–48 h pre-race) | 8–10 g |
+| Carb load (36–48 h pre-race) | 10–12 g per day, rehearsed and adapted to tolerance |
 
 Rough extra energy cost of running: about 1 kcal per kg per km. For a 70 kg
 runner a 25 km week is ~1,750 kcal on top of normal life and a 55 km peak
@@ -98,7 +98,9 @@ wholegrain bread, bananas, rice, potatoes, lentils, eggs, nuts.
   (a gel is ~20–30 g; a banana ~25 g). Note in the plan when their long runs
   first cross this line — it's a milestone.
 - **Marathon target: 60–90 g/h** — this needs a trained gut, and gut
-  training is real. Build it on long runs through the specific phase: start
+  training is real. Begin practising when long-run duration warrants it, not
+  only in the specific phase; record grams, timing and GI tolerance. As a
+  starting example rather than an obligatory schedule, start
   at ~40 g/h, add ~10 g/h every couple of weeks, using the gels they'll
   actually race with. Above ~60 g/h, glucose+fructose products are absorbed
   better than glucose alone.
@@ -129,12 +131,15 @@ wholegrain bread, bananas, rice, potatoes, lentils, eggs, nuts.
 The race and its date are in the config; anything unusual about the day
 (start time, heat, travel) is in the profile.
 
-- **36–48 h out: carb load** at 8–10 g/kg. In food: carbs at every meal and
+- **36–48 h out: carb load** typically 10–12 g/kg/day for a long endurance
+  race, adapted to rehearsed tolerance and practical intake. In food: carbs at every meal and
   snack, lower fibre and fat so it fits — white rice, pasta, bread, potatoes,
   juice, rice cakes. They'll gain ~1–2 kg from stored glycogen and water;
   that's the point, say so before they notice.
 - **Race breakfast**, 3 h before: the same breakfast they've rehearsed before
-  every long run in the specific phase. Set that rehearsal up deliberately.
+  long runs. The general pre-event range is 1–4 g/kg carbohydrate 1–4 h before,
+  adjusted to available time and GI tolerance; translate into familiar food.
+  Set that rehearsal up deliberately; never force an untested race-day dose.
 - **Caffeine**: ~3 mg/kg about an hour before helps, *if* they've tried it on
   a long run first.
 - **On course**: the gel plan from the gut-training block, by the clock, not
@@ -152,11 +157,12 @@ how much. Low energy availability shows up as:
 - persistent fatigue, heavy legs that rest days don't fix,
 - getting ill more often, niggles that don't heal, poor sleep,
 - for women, changes to the menstrual cycle — a reason to see a doctor, not
-  something to coach around.
+  something to coach around; reduced libido in men can also warrant assessment.
 
 These overlap with ordinary overreaching, so one sign means nothing. Two or
 three together across a couple of weeks, especially with weight falling, is
-worth raising plainly: "you're probably not eating enough for this volume."
+worth raising as a possibility, with a sports dietitian/doctor if persistent.
+Partial food logs and wearables cannot establish low energy availability.
 That conversation is the most useful nutrition intervention you'll make.
 
 ## 8. Supplements, alcohol, caffeine
@@ -190,3 +196,7 @@ Most days, never. The moments it earns a line:
 
 One concrete sentence, in food, tied to the session. Not a nutrition lecture
 appended to a training message.
+
+Ranges: [2016 Nutrition and Athletic Performance position paper](https://www.andeal.org/files/files/Collaborations/Position_Athletic-Performance_2016March.pdf).
+Translate into food and timing, adapt to tolerance, and distinguish complete
+intake from partial logs.

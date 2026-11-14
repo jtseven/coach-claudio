@@ -94,8 +94,9 @@ run.
 - **Quality session** (from the aerobic development phase): same rule, a
   day's buffer.
 - **Gym**: climbing can partly replace the upper/pull half; a big ride or
-  hike doesn't replace the lower session — the single-leg and calf work is
-  injury prophylaxis that cycling doesn't give.
+  hike does not provide the same resistance stimulus. Lower-body strength can
+  support economy and physical capacity, but does not guarantee injury prevention;
+  trim its fatigue-producing volume when the combined week needs recovery.
 - **Down weeks** are when a new sport or a big outdoor day fits best.
 - **Taper**: nothing new, nothing with fall or crash risk.
 

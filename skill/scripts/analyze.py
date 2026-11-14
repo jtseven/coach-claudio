@@ -12,6 +12,7 @@ Subcommands:
   weeklog   Build one weekly_log.jsonl entry: planned vs actual, ceiling
   trend     Read the weekly log back as a progression
   block     Last training block against the previous one (monthly review)
+  session   Advisory distance/duration review against the prior 30 days
   load      Fitness, fatigue and form (CTL/ATL/TSB) from Strava relative effort
   streams   One activity's streams: decoupling, efficiency, time in zones
   runlog    The per-run log those feed, or the runs missing from it
@@ -147,9 +148,16 @@ def cmd_paces(args):
     payload = {"vdot": args.vdot, "paces": {}, "zones": {}}
     lines = [f"Training paces at VDOT {args.vdot:g}", ""]
     for label, frac in INTENSITIES:
-        p = pace_at_intensity(args.vdot, frac)
+        # Keep the public key, but use the same equivalent as `vdot`, rather
+        # than a second, conflicting fixed-fraction marathon estimate.
+        p = (race_time_at_vdot(args.vdot, 42195) / 42.195 if label == "marathon"
+             else pace_at_intensity(args.vdot, frac))
         payload["paces"][label] = fmt_pace(p)
-        lines.append(f"  {label:<18} {fmt_pace(p)}/km")
+        display = "marathon equivalent" if label == "marathon" else label
+        lines.append(f"  {display:<20} {fmt_pace(p)}/km")
+    payload["limitations"] = ("Model paces/equivalents, not a demonstrated marathon target. "
+                              "Prescribe marathon work from reviewed current endurance, not goal time alone.")
+    lines.append(payload["limitations"])
     lines += ["", "Pace zones:"]
     for label, lo, hi in ZONE_BANDS:
         if lo is None:
@@ -450,12 +458,60 @@ def week_bounds(week_of):
 PROGRESSION_MODES = ("build", "planned-down", "travel-return", "illness-pain-return")
 
 
+def cmd_session(args):
+    """Observed exposure comparisons; deliberately no accepted/safe verdict."""
+    from datetime import date, timedelta
+    day = date.fromisoformat(args.date)
+    for value in (args.proposed_km, args.proposed_minutes, args.weekly_km):
+        if value is not None and (not math.isfinite(value) or value <= 0):
+            sys.exit("session distances/duration must be positive and finite")
+    if args.weekly_km is not None and args.weekly_km < args.proposed_km:
+        sys.exit("weekly-km must include the proposed session")
+    rows = [r for r in read_run_log() if r.get("sport", "Run") in RUN_TYPES
+            and r.get("date") and (day - timedelta(days=30)).isoformat() <= r["date"][:10] < day.isoformat()]
+    def observed_max(key):
+        values = [r[key] for r in rows if isinstance(r.get(key), (int, float))
+                  and math.isfinite(r[key]) and r[key] > 0]
+        return max(values) if values else None
+    longest = observed_max("km")
+    duration = observed_max("moving_s")
+    ratio = args.proposed_km / longest if longest else None
+    warnings = []
+    if ratio is None:
+        warnings.append("No observed distance reference: recent exposure is unknown.")
+    elif ratio > 1.10 + 1e-9:
+        warnings.append("Distance exceeds the observed 30-day longest by >10%: review exposure; observational evidence, not a causal safety limit.")
+    if args.proposed_minutes is not None:
+        if duration is None:
+            warnings.append("No observed duration reference.")
+        elif args.proposed_minutes * 60 > duration:
+            warnings.append("Duration exceeds the observed 30-day longest; review separately from distance.")
+        if args.proposed_minutes >= 180:
+            warnings.append("About three hours or more: explicitly weigh recovery cost; not a universal time cap.")
+    share = args.proposed_km / args.weekly_km if args.weekly_km else None
+    if share is not None and share >= 0.5:
+        warnings.append("At least half the proposed week's distance in one run: review concentration and supporting runs; not a universal share limit.")
+    result = {"date": day.isoformat(), "observed_runs": len(rows),
+              "recent_longest_km": longest, "recent_longest_minutes": duration / 60 if duration else None,
+              "proposed_km": args.proposed_km, "proposed_minutes": args.proposed_minutes,
+              "distance_ratio": ratio, "weekly_share": share, "warnings": warnings,
+              "coverage_complete": None,
+              "limitations": "Advisory run-log comparison only; missing/unlogged sessions may change the reference. Review intensity, terrain, adjacent days, symptoms and recovery even without flags."}
+    emit(result, [f"Prior 30 days: {len(rows)} logged runs, longest {longest} km; distance ratio {ratio}.",
+                  *warnings, result["limitations"]], args.json)
+
+
 def progression_policy(rows, mode="build", reason="", evidence="", proposed_km=None,
                        as_of=None, build_pct=None, travel_fraction=None,
-                       illness_fraction=None, return_cap_km=None):
+                       illness_fraction=None, return_cap_km=None, closed_week=None,
+                       peak_km=None, weeks_to_peak=None):
     """Conservative administrative guardrails, not a clinical clearance model."""
     from datetime import date, timedelta
     today = date.fromisoformat(as_of) if as_of else date.today()
+    closed = date.fromisoformat(closed_week) if closed_week else None
+    if closed is not None and (today.weekday() != 6 or closed != today - timedelta(days=6)
+                               or not reason.strip() or not evidence.strip()):
+        raise ValueError("closed-week requires this Sunday's Monday, reason and evidence of completed sessions")
     build_pct = cc.get("progression.build_pct", 10) if build_pct is None else build_pct
     travel_fraction = cc.get("progression.travel_fraction", 0.75) if travel_fraction is None else travel_fraction
     illness_fraction = cc.get("progression.illness_fraction", 0.5) if illness_fraction is None else illness_fraction
@@ -470,16 +526,20 @@ def progression_policy(rows, mode="build", reason="", evidence="", proposed_km=N
             raise ValueError("weekly km must be finite and nonnegative")
         if day.weekday() != 0 or day >= today:
             raise ValueError("history must contain completed Monday-dated weeks before as-of")
-        if day + timedelta(days=7) > today:
+        if day + timedelta(days=7) > today and day != closed:
             raise ValueError("partial current week cannot establish progression")
+        if day == closed and r.get("coverage_complete") is not True:
+            raise ValueError("closed-week coverage must be explicitly complete")
         dated.append((day, float(km), r))
     dated.sort(key=lambda x: x[0])
     if len({d for d, _, _ in dated}) != len(dated):
         raise ValueError("duplicate history weeks")
     recent = [(d, k, r) for d, k, r in dated if today - timedelta(weeks=8) <= d]
-    normal = [k for _, k, r in recent if k > 0 and r.get("week_kind") == "normal"
-              and r.get("tolerated") is True and r.get("coverage_complete") is True]
+    eligible = [(d, k) for d, k, r in recent if k > 0 and r.get("week_kind") == "normal"
+                and r.get("tolerated") is True and r.get("coverage_complete") is True]
+    normal = [k for _, k in eligible]
     baseline = _median(normal) if len(normal) >= 3 else None
+    reference = eligible[-1][1] if baseline is not None else None
     last = dated[-1][1] if dated else None
     stale = not dated or (today - dated[-1][0]).days > 14
     reasons = []
@@ -494,13 +554,20 @@ def progression_policy(rows, mode="build", reason="", evidence="", proposed_km=N
             cap = None
             reasons.append("illness/pain history requires explicit conservative return review")
         elif baseline is not None and complete and last_row.get("tolerated") is True and last_row.get("week_kind") == "normal":
-            cap = min(last * (1 + build_pct / 100), baseline * (1 + build_pct / 100))
-            reasons.append("build bounded by last completed week and multiweek tolerated baseline")
+            cap = last * (1 + build_pct / 100)
+            reasons.append("build from latest complete tolerated normal week; multiweek median is context, not a ratchet")
         else:
             reasons.append("sparse or unconfirmed normal history: hold observed volume; do not automatically increase")
     elif mode == "planned-down":
-        cap = baseline if complete and last_row.get("week_kind") == "planned-down" else None
-        reasons.append("planned down-week return bounded by recent tolerated normal baseline; not last week plus 10%")
+        cap = reference if complete and last_row.get("week_kind") == "planned-down" else None
+        # A down week cannot bridge an illness, travel or unknown week to an old
+        # normal workload. Only the normal block immediately before it qualifies.
+        preceding = dated[:-1]
+        while preceding and preceding[-1][2].get("week_kind") == "planned-down":
+            preceding = preceding[:-1]
+        if not preceding or not eligible or preceding[-1][0] != eligible[-1][0]:
+            cap = None
+        reasons.append("planned down-week return to most recent tolerated normal week; intervening disruptions require review")
     elif mode == "travel-return":
         cap = baseline * travel_fraction if baseline is not None and complete and last_row.get("week_kind") == "travel" else None
         reasons.append("travel return discounted from normal baseline; cross-training is not running-km credit")
@@ -515,7 +582,7 @@ def progression_policy(rows, mode="build", reason="", evidence="", proposed_km=N
     if mode == "build" and cap is not None and len(targeted) >= 2 and all(k / target < 0.95 for k, target in targeted):
         cap = min(cap, last)
         reasons.append("repeated missed targets: hold observed volume, do not increase")
-    latest_completed = today - timedelta(days=today.weekday() + 7)
+    latest_completed = closed or today - timedelta(days=today.weekday() + 7)
     if not dated or dated[-1][0] != latest_completed:
         cap = None
         reasons.append("latest completed week missing: no validated allowance")
@@ -542,7 +609,19 @@ def progression_policy(rows, mode="build", reason="", evidence="", proposed_km=N
             reasons.append("proposal requires explicit reason and evidence")
         if not accepted:
             reasons.append("proposal rejected: exceeds allowance, invalid volume, or missing evidence")
+    projection = None
+    if peak_km is not None or weeks_to_peak is not None:
+        if (peak_km is None or not math.isfinite(peak_km) or peak_km <= 0
+                or weeks_to_peak is None or not 0 <= weeks_to_peak <= 104):
+            raise ValueError("projection needs positive finite peak-km and weeks-to-peak in 0..104")
+        # An impossibility screen, not an achievable training trajectory.
+        upper = (last if weeks_to_peak == 0 else cap * (1 + build_pct / 100) ** (weeks_to_peak - 1)) if cap is not None else None
+        projection = {"peak_km": peak_km, "build_weeks": weeks_to_peak,
+                      "optimistic_upper_km": round(upper, 1) if upper is not None else None,
+                      "within_upper_bound": peak_km <= upper if upper is not None else None,
+                      "limitations": "Assumes every remaining week builds; excludes down weeks, illness, travel and taper. Not a prescription or proof of feasibility."}
     return {"mode": mode, "baseline_km": baseline, "baseline_weeks": len(normal),
+            "reference_km": reference, "closed_week": closed_week, "projection": projection,
             "previous_week_km": last, "max_next_week_km": round(cap, 1) if cap is not None else None,
             "accepted": accepted,
             "proposed_km": proposed_km if proposed_km is None or math.isfinite(proposed_km) else str(proposed_km),
@@ -559,10 +638,12 @@ def cmd_progression(args):
             rows = [json.loads(l) for l in fh if l.strip()]
         result = progression_policy(rows, **{k: getattr(args, k) for k in
             ("mode", "reason", "evidence", "proposed_km", "as_of", "build_pct",
-             "travel_fraction", "illness_fraction", "return_cap_km")})
+             "travel_fraction", "illness_fraction", "return_cap_km", "closed_week",
+             "peak_km", "weeks_to_peak")})
     except (ValueError, KeyError, OSError) as exc:
         sys.exit(str(exc))
-    emit(result, [f"Policy allowance: {result['max_next_week_km']} km", *result["reasons"],
+    projection_lines = [f"Optimistic projection: {result['projection']}"] if result["projection"] else []
+    emit(result, [f"Policy allowance: {result['max_next_week_km']} km", *result["reasons"], *projection_lines,
                   result["limitations"]], args.json)
     if result["accepted"] is False:
         raise SystemExit(2)
@@ -572,7 +653,7 @@ def rollup_progression(rows, args):
     """Display the same policy, without making partial rollups fail to render."""
     try:
         return progression_policy(rows, **{k: getattr(args, k, None) for k in
-            ("as_of", "build_pct", "travel_fraction", "illness_fraction", "return_cap_km")},
+            ("as_of", "build_pct", "travel_fraction", "illness_fraction", "return_cap_km", "closed_week")},
             mode=getattr(args, "mode", "build"), reason=getattr(args, "reason", ""),
             evidence=getattr(args, "evidence", ""))
     except (ValueError, KeyError, TypeError) as exc:
@@ -966,6 +1047,31 @@ def read_load_log():
         return {}
 
 
+def save_load_updates(updates):
+    """Merge under a shared lock; readers see either complete atomic snapshot."""
+    import fcntl
+    import tempfile
+    cc.LOAD_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with cc.LOAD_LOG.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        # Do not turn a corrupt store into an empty, successfully overwritten one.
+        store = json.loads(cc.LOAD_LOG.read_text()) if cc.LOAD_LOG.exists() else {}
+        store.update(updates)
+        path = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", dir=cc.LOAD_LOG.parent,
+                                             prefix="load-", suffix=".tmp", delete=False) as fh:
+                path = fh.name
+                json.dump(store, fh, indent=0, sort_keys=True)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(path, cc.LOAD_LOG)
+        finally:
+            if path and os.path.exists(path):
+                os.unlink(path)
+        return store
+
+
 def daily_load_series(store, until):
     """[(date, load, ctl, atl)] from the first stored day through `until`."""
     from collections import defaultdict
@@ -998,6 +1104,7 @@ def cmd_load(args):
     from datetime import date
 
     store = read_load_log()
+    updates = {}
     added = 0
     if args.activities:
         for a in load_activities(args.activities):
@@ -1006,13 +1113,12 @@ def cmd_load(args):
             if not day or sport in COMMUTE_TYPES or a.get("id") is None:
                 continue
             effort = field(a, "relative_effort", "suffer_score")
-            store[str(a["id"])] = {"date": day, "sport": sport,
-                                   "load": effort if effort is not None else None}
+            updates[str(a["id"])] = {"date": day, "sport": sport,
+                                     "load": effort if effort is not None else None}
             added += 1
+    store.update(updates)
     if args.save and added and cc.write_allowed("load log"):
-        tmp = cc.LOAD_LOG.with_suffix(".tmp")
-        tmp.write_text(json.dumps(store, indent=0, sort_keys=True))
-        tmp.replace(cc.LOAD_LOG)
+        store = save_load_updates(updates)
     until = date.fromisoformat(args.until) if args.until else date.today()
     store = {k: r for k, r in store.items() if r["date"] <= until.isoformat()}
     series = daily_load_series(store, until)
@@ -1105,13 +1211,12 @@ def cmd_load(args):
 #
 # Aerobic decoupling compares the efficiency of the first half of the steady
 # part of a run with the second. Efficiency is output per heartbeat: speed
-# (m/min) per beat, or watts per beat when power exists - preferred, because
-# power doesn't care about hills. Below 5% the athlete is aerobically solid at
-# that effort; above 10% the effort outran their aerobic base (or heat,
-# dehydration, fuelling).
+# (m/min) per beat, or estimated watts per beat. Terrain and sensor coverage
+# still matter with power. Drift categories describe the file, not readiness.
 
 DECOUPLE_MIN_S = 30 * 60   # steady time needed after the warm-up
 EASY_RUN_MIN_S = 20 * 60   # shorter runs are too noisy for the efficiency trend
+METRIC_MIN_COVERAGE = 0.90  # operational trend filter, not a validated statistical threshold
 STREAM_ALIASES = {"heartrate": "heart_rate", "velocity": "velocity_smooth"}
 
 
@@ -1228,6 +1333,8 @@ def decoupling(samples, skip_s):
             cut = i + 1
             break
     halves = [steady[:cut], steady[cut:]]
+    if not all(halves):
+        return {"steady_s": total, "reason": "insufficient samples to compare two halves"}
     has_power = all(any((s["w"] or 0) > 0 for s in h) for h in halves)
     basis = "power" if has_power else "pace"
     res = {"steady_s": total, "basis": basis, "halves": []}
@@ -1240,15 +1347,19 @@ def decoupling(samples, skip_s):
         if alts:
             half["net_m"] = round(alts[-1] - alts[0])
         if basis == "power":
-            w = _wavg([s for s in h if (s["w"] or 0) > 0], "w")
+            paired = [s for s in h if (s["w"] or 0) > 0]
+            w = _wavg(paired, "w")
             half["avg_watts"] = round(w, 1)
-            half["ef"] = w / hr
+            half["ef"] = w / _wavg(paired, "hr")
         else:
-            v = _wavg(h, "v")
+            paired = [s for s in h if (s["v"] or 0) > 0]
+            v = _wavg(paired, "v")
             if v is None:
                 return {"steady_s": total, "reason": "no velocity_smooth or watts stream"}
             half["pace"] = fmt_pace(1000 / v) if v else "-"
-            half["ef"] = v * 60 / hr
+            half["ef"] = v * 60 / _wavg(paired, "hr")
+        if sum(s["dt"] for s in paired) < sum(s["dt"] for s in h) * METRIC_MIN_COVERAGE:
+            return {"steady_s": total, "reason": "insufficient paired output/HR coverage in a half"}
         res["halves"].append(half)
     e1, e2 = res["halves"][0]["ef"], res["halves"][1]["ef"]
     res["pct"] = round((e1 - e2) / e1 * 100, 1)
@@ -1293,8 +1404,12 @@ def analyse_streams(st, ceiling, skip_s):
     res["avg_hr"] = round(hr, 1)
     if v:
         res["pace"] = fmt_pace(1000 / v)
-        res["ef"] = round(v * 60 / hr, 3)
+    paired_speed = [s for s in with_hr if (s["v"] or 0) > 0]
+    res["quality"]["speed_hr_s"] = sum(s["dt"] for s in paired_speed)
+    if paired_speed:
+        res["ef"] = round(_wavg(paired_speed, "v") * 60 / _wavg(paired_speed, "hr"), 3)
     powered = [s for s in with_hr if (s["w"] or 0) > 0]
+    res["quality"]["power_hr_s"] = sum(s["dt"] for s in powered)
     if powered:
         res["avg_watts"] = round(_wavg(powered, "w"), 1)
         res["wpb"] = round(res["avg_watts"] / _wavg(powered, "hr"), 3)
@@ -1393,7 +1508,7 @@ def cmd_streams(args):
                      **{k: res[k] for k in ("km", "moving_s", "avg_hr", "pace", "ef",
                                             "avg_watts", "wpb", "gain_m_per_km",
                                             "pct_above_ceiling", "zone_labels", "zone_s",
-                                            "intensity_s") if k in res}}
+                                            "intensity_s", "quality", "limitations") if k in res}}
             if "pct" in d:
                 entry["decoupling_pct"] = d["pct"]
                 entry["decoupling_basis"] = d["basis"]
@@ -1463,7 +1578,15 @@ def _median(xs):
 def is_easy(r):
     return (r.get("pct_above_ceiling") is not None
             and r["pct_above_ceiling"] <= CEILING_TIME_TOLERANCE_PCT
-            and (r.get("moving_s") or 0) >= EASY_RUN_MIN_S)
+            and (r.get("moving_s") or 0) >= EASY_RUN_MIN_S
+            and (r.get("quality", {}).get("hr_observed_s") or 0)
+                >= r["moving_s"] * METRIC_MIN_COVERAGE)
+
+
+def metric_covered(r, metric):
+    key = {"ef": "speed_hr_s", "wpb": "power_hr_s"}[metric]
+    return bool(r.get(metric) and r.get("moving_s")
+                and (r.get("quality", {}).get(key) or 0) >= r["moving_s"] * METRIC_MIN_COVERAGE)
 
 
 def efficiency_weeks(rows, weeks):
@@ -1472,15 +1595,15 @@ def efficiency_weeks(rows, weeks):
 
     by = defaultdict(list)
     for r in rows:
-        if r.get("sport", "Run") in RUN_TYPES and is_easy(r):
+        if r.get("sport", "Run") in RUN_TYPES and is_easy(r) and any(metric_covered(r, k) for k in ("ef", "wpb")):
             by[_monday(r["date"])].append(r)
     out = []
     for monday in sorted(by)[-weeks:]:
         rs = by[monday]
         out.append((monday, {
             "n": len(rs),
-            "ef": _median([r["ef"] for r in rs if r.get("ef")]),
-            "wpb": _median([r["wpb"] for r in rs if r.get("wpb")]),
+            "ef": _median([r["ef"] for r in rs if metric_covered(r, "ef")]),
+            "wpb": _median([r["wpb"] for r in rs if metric_covered(r, "wpb")]),
             "gain": _median([r["gain_m_per_km"] for r in rs if r.get("gain_m_per_km") is not None]),
             "hr": _median([r["avg_hr"] for r in rs if r.get("avg_hr")]),
         }))
@@ -1495,6 +1618,7 @@ def run_quality(rows, usable, as_of=None):
     usable_dates = sorted(r["date"][:10] for r in usable if r.get("date"))
     usable_age = (today - date.fromisoformat(usable_dates[-1])).days if usable_dates else None
     return {"logged_runs": len(rows), "usable_runs": len(usable),
+            "hr_coverage_unknown_runs": sum("hr_observed_s" not in r.get("quality", {}) for r in rows),
             "missing_or_excluded_runs": len(rows)-len(usable),
             "date_start": dates[0] if dates else None, "date_end": dates[-1] if dates else None,
             "stale_days": age, "stale": age is None or age > 14,
@@ -1507,15 +1631,16 @@ def run_quality(rows, usable, as_of=None):
 def quality_lines(quality):
     return [f"Quality: {quality['usable_runs']}/{quality['logged_runs']} logged runs usable; "
             f"{quality['date_start']} to {quality['date_end']}; confidence {quality['confidence']}. "
-            "Full activity coverage unknown; compare runlog --missing against a complete activity list."]
+            "Full activity coverage unknown; compare runlog --missing against a complete activity list.",
+            f"HR coverage unknown for {quality['hr_coverage_unknown_runs']} runs; raw zone time remains observed-only, efficiency needs paired coverage."]
 
 
 def cmd_efficiency(args):
-    rows = read_run_log()
+    rows = sorted(read_run_log(), key=lambda r: r.get("date", ""))
     weeks = efficiency_weeks(rows, args.weeks)
     if not weeks:
         quality = run_quality(rows, [], args.as_of)
-        emit({"weeks": [], "quality": quality, "limitations": "No usable easy runs; no trend can be inferred."},
+        emit({"weeks": [], "quality": quality, "limitations": "No usable easy runs; no trend can be inferred. Efficiency needs >=90% observed HR and paired output; legacy coverage is unknown."},
              ["No usable easy runs in the run log.", *quality_lines(quality)], args.json)
         return
     ceiling = cc.easy_ceiling()
@@ -1528,11 +1653,11 @@ def cmd_efficiency(args):
         gain = f"{w['gain']:.0f}" if w["gain"] is not None else "-"
         lines.append(f"{monday:<12}{w['n']:>5}{w['hr'] or 0:>6.0f}"
                      f"{(w['ef'] or 0):>7.2f}{at_ceiling:>12}{wpb:>8}{gain:>6}")
-    easy = [r for r in rows if r.get("sport", "Run") in RUN_TYPES and is_easy(r) and r.get("ef")]
+    easy = [r for r in rows if r.get("sport", "Run") in RUN_TYPES and is_easy(r) and metric_covered(r, "ef")]
     payload = {"weeks": [{"week_of": m, **w} for m, w in weeks]}
     quality = run_quality(rows, easy, args.as_of)
     payload["quality"] = quality
-    payload["limitations"] = "Few comparable runs, stale history, missing HR/power, terrain, weather and sensors limit inference. EF is not proof of fitness change or an injury predictor."
+    payload["limitations"] = "Trends require >=90% observed HR and paired output coverage (operational filter). Legacy coverage is unknown and excluded. Terrain, weather and sensors limit inference; EF is not proof of fitness change."
     lines += quality_lines(quality) + [payload["limitations"]]
     if len(easy) >= 6 and not quality["usable_stale"]:
         k = min(len(easy) // 2, 8)
@@ -1547,6 +1672,7 @@ def cmd_efficiency(args):
         lines.append("  Within ±2% is noise. Check the m/km column before crediting "
                      "fitness - flatter routes raise EF too.")
     longs = [r for r in rows if r.get("decoupling_pct") is not None
+             and (r.get("quality", {}).get("hr_observed_s") or 0) >= (r.get("moving_s") or 1) * METRIC_MIN_COVERAGE
              and (r.get("moving_s") or 0) >= 60 * 60][-6:]
     if longs:
         payload["long_runs"] = longs
@@ -1616,7 +1742,7 @@ def cmd_zonedist(args):
         payload["overall_pct"] = pct
         lines += ["", f"Overall: {pct['low']}% low, {pct['mid']}% mid, {pct['high']}% high."]
         if pct["mid"] > 20 and pct["mid"] > pct["high"]:
-            lines.append("  A large observed middle; check session intent, HR lag, terrain and missingness before changing training.")
+            lines.append("  Middle-zone time may be planned tempo/marathon work. Compare session intent and phase; do not impose a polarized target or remove planned work from the measured distribution.")
         elif pct["low"] >= 75:
             lines.append("  Mostly low-intensity among observed classified time; not necessarily the full week's distribution.")
     lines.append("By HR time: intervals' recoveries count as low, and HR lags short reps.")
@@ -1778,7 +1904,17 @@ def main():
     s.add_argument("--build-pct", type=float)
     s.add_argument("--travel-fraction", type=float)
     s.add_argument("--illness-fraction", type=float)
+    s.add_argument("--closed-week", help="this Sunday's Monday, only after all sessions are finished")
+    s.add_argument("--peak-km", type=float, help="desired peak for optimistic feasibility screen")
+    s.add_argument("--weeks-to-peak", type=int, help="remaining build weeks, excluding taper")
     s.set_defaults(func=cmd_progression)
+
+    s = sub.add_parser("session", help="advisory review against logged runs in prior 30 days")
+    s.add_argument("--date", required=True, help="proposed session date, YYYY-MM-DD")
+    s.add_argument("--proposed-km", type=float, required=True)
+    s.add_argument("--proposed-minutes", type=float)
+    s.add_argument("--weekly-km", type=float, help="proposed week including this session")
+    s.set_defaults(func=cmd_session)
 
     s = sub.add_parser("week", help="weekly running volume rollup")
     s.add_argument(
@@ -1895,6 +2031,7 @@ def main():
         parser.add_argument("--travel-fraction", type=float)
         parser.add_argument("--illness-fraction", type=float)
         parser.add_argument("--return-cap-km", type=float)
+        parser.add_argument("--closed-week", help="explicitly closed Sunday week's Monday")
 
     args = p.parse_args()
     args.func(args)

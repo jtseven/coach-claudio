@@ -22,7 +22,8 @@ Check overnight recovery FIRST - it may change what you advise:
   python3 {scripts}/health.py summary
 Act on the NOTABLE line only when it changes today's session: short sleep or
 a clearly suppressed night before a hard or long session, or respiratory rate
-and wrist temperature up together (possible illness). Quote the actual number
+and wrist temperature showing a sustained change that warrants asking about
+symptoms. Do not infer illness from wearable readings. Quote the actual number
 when you raise it. A single metric wobbling, a missing value, or a normal
 night: say nothing about it at all.
 {{/if}}
